@@ -110,9 +110,13 @@ docker-shell: docker-image
 	$(DOCKER_RUN) -it -w /src $(DOCKER_IMAGE) /bin/bash
 
 # PyPI: the source package plus Linux wheels (manylinux and musllinux) for
-# every supported Python.  macOS and Windows wheels are built by the
-# GitHub workflow (.github/workflows/wheels.yml).
+# every supported Python.  PYPI_ARCHS picks the CPU types; the default is
+# this machine's.  Use PYPI_ARCHS="x86_64 aarch64" to add 64-bit ARM (ie:
+# Raspberry Pi) wheels; that runs under emulation (needs qemu-user-static)
+# and is slow.  macOS and Windows wheels can only be built on those systems
+# (see .github/workflows/wheels.yml).
 CIBUILDWHEEL_VERSION = 4.3.4
+PYPI_ARCHS ?= native
 PYPI_OUT = dist/pypi
 PYRUN = $(shell command -v uvx >/dev/null 2>&1 && echo uvx || \
           { command -v pipx >/dev/null 2>&1 && echo pipx run; })
@@ -124,7 +128,7 @@ docker-pypi:
 	$(PYRUN) --from build pyproject-build --sdist --outdir $(PYPI_OUT) .
 	CIBW_CONTAINER_ENGINE=$(notdir $(CONTAINER)) \
 	   $(PYRUN) cibuildwheel==$(CIBUILDWHEEL_VERSION) --platform linux \
-	   --output-dir $(PYPI_OUT) .
+	   --archs "$(PYPI_ARCHS)" --output-dir $(PYPI_OUT) .
 	$(PYRUN) twine check --strict $(PYPI_OUT)/*
 	@echo "PyPI files written to $(PYPI_OUT)/"
 

@@ -1,16 +1,23 @@
-# Builds the PyPI source package and wheels for Linux, macOS and Windows.
-#  - Runs on every push and pull request (to make sure everything builds).
-#  - Publishing a GitHub release also uploads the files to PyPI, using
-#    PyPI trusted publishing (no API token needed; see packaging/README.md).
+# Builds and tests the PyPI source package and wheels on Linux, macOS and
+# Windows.
+#  - Every push and pull request: build and test only; nothing is kept
+#    (no artifacts are saved).
+#  - Pushing a version tag (ie: v1.1.0): once every build and test has
+#    passed, the publish jobs build the files again and upload them straight
+#    to PyPI using trusted publishing (no API token is stored; see
+#    packaging/README.md).  This is the only time PyPI is touched, and
+#    nothing is uploaded unless everything passed.
 name: Wheels
 
 on:
   push:
     branches: [master]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
   pull_request:
-  release:
-    types: [published]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   wheels:
@@ -30,11 +37,6 @@ jobs:
         env:
           CIBW_ARCHS_MACOS: x86_64 arm64
 
-      - uses: actions/upload-artifact@v7
-        with:
-          name: wheels-${{ matrix.os }}
-          path: ./wheelhouse/*.whl
-
   sdist:
     name: Source package
     runs-on: ubuntu-latest
@@ -47,25 +49,33 @@ jobs:
       - name: Check the PyPI page will render
         run: pipx run twine check --strict dist/*
 
-      - uses: actions/upload-artifact@v7
-        with:
-          name: sdist
-          path: dist/*.tar.gz
-
+  # Version tags only, and only once every job above has passed
   publish:
-    name: Publish to PyPI
-    if: github.event_name == 'release' && github.event.action == 'published'
+    name: Publish (${{ matrix.os }})
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: [wheels, sdist]
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/dateblock
+    runs-on: ${{ matrix.os }}
+    # Lets this job prove to PyPI that it comes from this repository
     permissions:
+      contents: read
       id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     steps:
-      - uses: actions/download-artifact@v8
-        with:
-          path: dist
-          merge-multiple: true
+      - uses: actions/checkout@v7
 
-      - uses: pypa/gh-action-pypi-publish@v1.14.3
+      - name: Build wheels (already tested above)
+        uses: pypa/cibuildwheel@v4.3.4
+        env:
+          CIBW_ARCHS_MACOS: x86_64 arm64
+          CIBW_TEST_SKIP: "*"
+
+      - name: Build source package
+        if: matrix.os == 'ubuntu-latest'
+        run: pipx run build --sdist --outdir wheelhouse
+
+      - name: Upload to PyPI
+        shell: bash
+        run: .github/workflows/pypi-upload.sh wheelhouse/*

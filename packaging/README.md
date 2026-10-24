@@ -86,30 +86,34 @@ of the source tree. The PyPI wheels have the C++ code compiled straight into
 the Python module, so they need nothing else installed, and they include the
 `dateblock` command.
 
-Build the source package and the Linux wheels (manylinux and musllinux, for
-x86_64, Python 3.9 to 3.14) with:
+Build the source package and the Linux wheels (manylinux and musllinux,
+Python 3.9 to 3.14) with:
 ```bash
-make docker-pypi
+make docker-pypi                              # this machine's CPU (x86_64)
+make docker-pypi PYPI_ARCHS="x86_64 aarch64"  # plus 64-bit ARM (Raspberry Pi)
 ```
 This needs Docker (or Podman) plus [uv](https://docs.astral.sh/uv/) or pipx.
-The files are written to `dist/pypi/`, and `twine check` makes sure the PyPI
-page will render. Upload them with your own PyPI credentials:
+ARM wheels are built under emulation, so they need `qemu-user-static` and
+take a while (about 30 minutes for the full set). The files are written to
+`dist/pypi/`, and `twine check` makes sure the PyPI page will render.
+
+| Wheels for             | Where they can be built                           |
+|------------------------|---------------------------------------------------|
+| Linux x86_64           | locally, with `make docker-pypi`                  |
+| Linux ARM64 (ie: Pi)   | locally under emulation (`PYPI_ARCHS` above)      |
+| macOS (Intel and ARM)  | only on a Mac (or GitHub's macOS runners)         |
+| Windows                | only on Windows (or GitHub's Windows runners)     |
+
+Anyone on a platform without a wheel can still `pip install dateblock`; pip
+builds it from the source package instead, which needs a C++ compiler and
+the Python headers.
+
+Upload them with your own PyPI credentials:
 ```bash
 uvx twine upload dist/pypi/*
 ```
 
-The GitHub workflow (`.github/workflows/wheels.yml`) builds the full set:
-Linux (x86_64 and aarch64), macOS (Intel and Apple Silicon) and Windows. It
-runs on every push. Publishing a GitHub release also uploads everything to
-PyPI using [trusted publishing](https://docs.pypi.org/trusted-publishers/),
-so no API token is stored anywhere. To set that up once:
-1. On PyPI, open the dateblock project's **Settings > Publishing** and add a
-   GitHub publisher: owner `caronc`, repository `dateblock`, workflow
-   `wheels.yml`, environment `pypi`.
-2. On GitHub, create an environment called `pypi` (repository **Settings >
-   Environments**).
-
-## Making a release
+## Making a Release
 ```bash
 make release
 ```

@@ -36,6 +36,7 @@ EXTRA_DIST = \
 	packaging/docker/Dockerfile.debian13 \
 	packaging/docker/Dockerfile.arch \
 	.github/workflows/wheels.yml \
+	.github/workflows/pypi-upload.sh \
 	pyproject.toml \
 	setup.py \
 	MANIFEST.in \
