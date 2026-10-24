@@ -1,7 +1,7 @@
-# Datetools provide a method of manipulating and working dates and times.
-# Copyright (C) 2013-2018 Chris Caron <lead2gold@gmail.com>
+# Dateblock blocks (sleeps) until a cron-style moment in time.
+# Copyright (C) 2013-2026 Chris Caron <lead2gold@gmail.com>
 #
-# This file is part of Datetools.  Datetools is free software; you can
+# This file is part of Dateblock.  Dateblock is free software; you can
 # redistribute it and/or modify it under the terms of the GNU General Public
 # License as published by the Free Software Foundation; either version 2 of
 # the License, or (at your option) any later version.
@@ -14,40 +14,24 @@
 # You should have received a copy of the GNU General Public License along with
 # this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
-# 
-bin_PROGRAMS=dateblock datemath
-#bin_PROGRAMS=dateblock datemath unittest
-#unittest_SOURCES=Date.cpp unittest.cpp
-dateblock_SOURCES=Date.cpp dateblock.cpp
-datemath_SOURCES=Date.cpp datemath.cpp
+#
 
-if HAS_PYTHON
-install-exec-local:
-	echo "enter install-exec-local in Makefile.am"
-	[ ! -z "$(DESTDIR)" ] && $(PYTHON) setup.py install --prefix="$(prefix)" --root="$(DESTDIR)" || :
-	[ -z "$(DESTDIR)" ] && $(PYTHON) setup.py install --prefix="$(prefix)" || :
-	echo "leave install-exec-local in Makefile.am"
+# Shared library holding the date/cron logic (used by the dateblock tool and
+# the Python bindings)
+lib_LTLIBRARIES = libdateblock.la
+libdateblock_la_SOURCES = Date.cpp
+libdateblock_la_LDFLAGS = -version-info $(DATEBLOCK_LT_VERSION) -no-undefined
 
-uninstall-local:
-	echo "enter uninstall-local in Makefile.am"
-	[ ! -z "$(DESTDIR)" ] && $(PYTHON) setup.py install --prefix="$(prefix)" --root="$(DESTDIR)" --record python-files.tmp || :
-	[ -z "$(DESTDIR)" ] && $(PYTHON) setup.py install --prefix="$(prefix)" --record python-files.tmp || :
-	cat python-files.tmp | xarg rm -rf
-	rm -f python-files.tmp
-	echo "leave uninstall-local in Makefile.am"
+dateblockincludedir = $(includedir)/dateblock
+dateblockinclude_HEADERS = Date.h
 
-build-python:
-	$(PYTHON) setup.py build
+bin_PROGRAMS = dateblock
+dateblock_SOURCES = dateblock.cpp dateblock.h
+dateblock_LDADD = libdateblock.la $(BOOST_PROGRAM_OPTIONS_LIBS)
 
-# Make sure the python module is built via 'make all'.
-all-local: build-python
-endif #HAS_PYTHON
-
-clean-python:
-	rm -rf build dateblock.so
-
-PHONY_TARGETS = clean-python
-
-clean-local: clean-python
-
-.PHONY: $(PHONY_TARGETS)
+# 'make check'
+check_PROGRAMS = unittest
+unittest_SOURCES = unittest.cpp
+unittest_LDADD = libdateblock.la
+dist_check_SCRIPTS = cli-test.sh
+TESTS = unittest cli-test.sh

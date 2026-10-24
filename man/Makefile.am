@@ -1,1 +1,1 @@
-man_MANS = dateblock.1 datemath.1
+dist_man_MANS = dateblock.1

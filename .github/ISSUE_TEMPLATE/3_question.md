@@ -1,6 +1,6 @@
 ---
 name: ❓ Support Question
-about: Ask a question about datetools
+about: Ask a question about dateblock
 title: ''
 labels: 'question'
 assignees: ''

@@ -1,10 +1,7 @@
-[![Paypal](http://repo.nuxref.com/pub/img/paypaldonate.svg)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=MHANV39UZNQ5E)
+[![Paypal](https://img.shields.io/badge/paypal-donate-green.svg)](https://www.paypal.com/donate/?hosted_button_id=CR6YF7KLQWQ5E)
 
-Date/Time Manipulation
-======================
-Datetools packages itself with 2 tools, dateblock and datemath.
-
-## Dateblock
+Dateblock
+=========
 Dateblock allows you to block (exactly how a Linux/Unix Cron might) _until_ a
 specific point of time unlike 'sleep' which blocks _for_ a set period of time.
 The difference is very subtle but can prove to be very useful.
@@ -195,7 +192,7 @@ dateblock -c "* 5 * * * * +20"
 The DateBlock python bindings are really easy to use too:
 ```python
 from dateblock import dateblock
-from datetime import datetime
+from datetime import datetime, date, time, timedelta
 
 # Returns the date object it will unblock at
 result = dateblock("* /20", block=False)
@@ -217,47 +214,46 @@ result = dateblock("/1", isc=True)
 # Dateblock supports date, time and epoch time too!
 #
 # Date: (yyyy, mm, dd)
-from dateblock import date
 result = dateblock("/5", ref=date(2017, 4, 22))
 
 # Time: (hh, mm, ss)
-from dateblock import time
 result = dateblock("/5", ref=time(10, 5, 0))
 
 # Epoch: seconds
 result = dateblock("/5", ref=13424236)
-
 ```
 
-## Datemath
-Datemath allows you to manipulate a date and or time by adding
-and or subtracting to it. It can help with scripting and calculating
-a specific date.
-
-__Syntax__:
-datemath [options] [-f DateTimeFormat]
-
-__Options__:
-```
-  -h [ --help ]         Show this help screen.
-  -s [ --seconds ] arg  Specify the offset (+/-) in seconds.
-  -n [ --minutes ] arg  Specify the offset (+/-) in minutes.
-  -o [ --hours ] arg    Specify the offset (+/-) in hours.
-  -d [ --days ] arg     Specify the offset (+/-) in days.
-  -m [ --months ] arg   Specify the offset (+/-) in months.
-  -y [ --years ] arg    Specify the offset (+/-) in years.
-  -f [ --format ] arg   Specify the desired output format (see $>man date). The
-                        default is: %Y-%m-%d %H:%M:%S
-```
+A few things worth knowing:
+- Results are returned as a (naive) `datetime` in local time. Timezone aware
+  `ref` values are converted to local time first.
+- An invalid cron string raises `SyntaxError`; a cron that can never happen
+  (such as February 31st) raises `ValueError`.
+- While blocking, other Python threads keep running and Ctrl-C
+  (`KeyboardInterrupt`) works as expected.
 
 ## Installation
-Assuming you have GNU C++ compiler and the standard development tools that
-usually go with it (make, autoconf, automake, etc) then the following will
-install everything for you.
+Assuming you have a C++ compiler, the Boost `program_options` library and
+the standard development tools that usually go with it (make, autoconf,
+automake and libtool), then the following will install everything for you.
 
 ```bash
-autogen.sh
+./autogen.sh
 ./configure
 make
+make check
 sudo make install
 ```
+
+This installs:
+- `libdateblock.so` (the shared library holding all of the date logic) and
+  its headers in `include/dateblock/`, with a `dateblock.pc` file for
+  `pkg-config`.
+- The `dateblock` command line tool.
+
+The Python bindings are built separately (after running `make`):
+```bash
+pip install ./python
+```
+
+See [INSTALL.md](INSTALL.md) for more details, including how to build the
+RPM packages for Fedora and RHEL/CentOS/Alma/Rocky 9 and 10.
