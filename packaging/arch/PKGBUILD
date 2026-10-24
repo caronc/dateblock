@@ -1,0 +1,54 @@
+# Maintainer: Chris Caron <lead2gold@gmail.com>
+#
+# Builds two packages:
+#  - dateblock:        the tool, the libdateblock shared library and headers
+#  - python-dateblock: the Python bindings
+pkgbase=dateblock
+pkgname=('dateblock' 'python-dateblock')
+pkgver=1.1.0
+pkgrel=1
+pkgdesc='Block (sleep) until a cron-style moment in time'
+arch=('x86_64' 'aarch64')
+url='https://github.com/caronc/dateblock'
+license=('GPL-2.0-or-later')
+makedepends=('boost' 'python' 'python-setuptools' 'python-build'
+             'python-installer' 'python-wheel')
+source=("$pkgbase-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+# Replace with the real checksum ('updpkgsums') once v$pkgver is tagged
+sha256sums=('SKIP')
+
+build() {
+  cd "$pkgbase-$pkgver"
+  autoreconf --force --install
+  ./configure --prefix=/usr --disable-static
+  make
+
+  # The Python bindings link against the libdateblock that was just built
+  cd python
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "$pkgbase-$pkgver"
+  TZ=UTC make check
+
+  local pylib="$srcdir/pylib"
+  python -m installer --destdir="$pylib" python/dist/*.whl
+  TZ=UTC LD_LIBRARY_PATH="$PWD/src/.libs" \
+    PYTHONPATH="$(echo "$pylib"/usr/lib/python3*/site-packages)" \
+    python -m unittest discover -v -s python/tests
+}
+
+package_dateblock() {
+  depends=('gcc-libs' 'glibc' 'boost-libs')
+  cd "$pkgbase-$pkgver"
+  make DESTDIR="$pkgdir" install
+  rm -f "$pkgdir"/usr/lib/*.la
+}
+
+package_python-dateblock() {
+  pkgdesc='Python bindings for dateblock (cron-style blocking)'
+  depends=("dateblock=$pkgver" 'python')
+  cd "$pkgbase-$pkgver"
+  python -m installer --destdir="$pkgdir" python/dist/*.whl
+}

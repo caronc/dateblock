@@ -255,5 +255,31 @@ The Python bindings are built separately (after running `make`):
 pip install ./python
 ```
 
-See [INSTALL.md](INSTALL.md) for more details, including how to build the
-RPM packages for Fedora and RHEL/CentOS/Alma/Rocky 9 and 10.
+### Building with Docker
+Don't want to install the build tools? If you have
+[Docker](https://www.docker.com/) (or [Podman](https://podman.io/)) and
+GNU make, you can build and test everything inside a container straight
+from a fresh checkout; no `./configure` needed:
+
+```bash
+# Compile and run all of the tests
+make docker-build
+
+# Build packages
+make docker-rpm                 # Fedora 44 RPMs
+make docker-rpm DISTRO=el9      # EL9 RPMs (or DISTRO=el10)
+make docker-deb                 # Debian 13 .deb packages
+make docker-arch                # Arch Linux packages
+make docker-all                 # every one of the above
+
+# Open a shell inside the build container to poke around
+make docker-shell
+```
+
+- Results are written to `dist/<distro>/`.
+- Your checkout is mounted read-only, so the container never changes it.
+- Podman is used if Docker isn't installed; set `CONTAINER=podman` to
+  prefer it.
+
+See [packaging/README.md](packaging/README.md) for the details on each
+package format, and [INSTALL.md](INSTALL.md) for building from source.

@@ -1,0 +1,192 @@
+.\" generated with Ronn-NG/v0.10.1
+.\" http://github.com/apjanke/ronn-ng/tree/0.10.1
+.TH "DATEBLOCK" "1" "October 2026" "Dateblock" "Dateblock Manual"
+.SH "NAME"
+\fBdateblock\fR \- block (sleep) until a cron\-style moment in time
+.SH "SYNOPSIS"
+\fBdateblock\fR [\fB\-t\fR] [\fB\-v\fR] \fB\-c\fR \fICRON\fR [\fB\-i\fR]
+.br
+\fBdateblock\fR [\fB\-t\fR] [\fB\-v\fR] [\fB\-s\fR \fISEC\fR] [\fB\-n\fR \fIMIN\fR] [\fB\-o\fR \fIHOUR\fR] [\fB\-d\fR \fIDOM\fR] [\fB\-m\fR \fIMONTH\fR] [\fB\-w\fR \fIDOW\fR] [\fB\-x\fR \fIDRIFT\fR]
+.br
+\fBdateblock\fR \fB\-h\fR
+.SH "DESCRIPTION"
+\fBdateblock\fR works like sleep(1), except that instead of waiting \fIfor\fR a set period of time, it waits \fIuntil\fR a specific point in time is reached\. That point in time is described the same way a crontab(5) entry is, so \fBdateblock\fR can be thought of as running a single cron entry in the foreground: it returns the moment the schedule is next matched\.
+.P
+On top of the regular cron fields, \fBdateblock\fR can also:
+.IP "\(bu" 4
+match on a specific \fIsecond\fR (not just a minute)\.
+.IP "\(bu" 4
+\fIdrift\fR; wait an extra number of seconds after the time is matched\.
+.IP "" 0
+.P
+Use \fB\-\-test\fR to see when \fBdateblock\fR would unblock without waiting\.
+.SH "OPTIONS"
+\fB\-h\fR, \fB\-\-help\fR: Show the help screen (with examples) and exit\.
+.P
+\fB\-t\fR, \fB\-\-test\fR: Do not block; print the current time and the time \fBdateblock\fR would unblock at, then exit\.
+.P
+\fB\-v\fR, \fB\-\-verbose\fR: Print the current time and the time \fBdateblock\fR will unblock at before blocking, and the time it actually unblocked at afterwards\.
+.P
+\fB\-c\fR, \fB\-\-cron=\fR\fICRON\fR: The full schedule as a single cron string; see \fICRON STRING\fR\. When this is used the individual field options below are ignored\.
+.P
+\fB\-i\fR, \fB\-\-isc\fR: Read the \fB\-\-cron\fR string as a regular 5 field crontab(5) entry (minute, hour, day of month, month, day of week) with no second or drift fields\. ISC stands for the Internet Systems Consortium cron\.
+.P
+\fB\-s\fR, \fB\-\-second=\fR\fISEC\fR: The second(s) to unblock on (0\-59)\.
+.P
+\fB\-n\fR, \fB\-\-minute=\fR\fIMIN\fR: The minute(s) to unblock on (0\-59)\.
+.P
+\fB\-o\fR, \fB\-\-hour=\fR\fIHOUR\fR: The hour(s) to unblock on (0\-23)\.
+.P
+\fB\-d\fR, \fB\-\-dom=\fR\fIDOM\fR: The day(s) of the month to unblock on (1\-31)\.
+.P
+\fB\-m\fR, \fB\-\-month=\fR\fIMONTH\fR: The month(s) to unblock on (1\-12; Jan=1, \|\.\|\.\|\., Dec=12)\.
+.P
+\fB\-w\fR, \fB\-\-dow=\fR\fIDOW\fR: The day(s) of the week to unblock on (0\-6; Sun=0, \|\.\|\.\|\., Sat=6)\.
+.P
+\fB\-x\fR, \fB\-\-drift=\fR\fIDRIFT\fR: Extra seconds to wait once the time is matched; see \fIDRIFTING\fR\. Use the 7th field (or \fB+\fR\fIDRIFT\fR) instead when using \fB\-\-cron\fR\.
+.P
+At least one field (or \fB\-\-cron\fR) must be given\. Fields that are not given match any value, except for the ones \fIsmaller\fR than the smallest field given: those are reset to their lowest value\. So \fB\-n 5\fR unblocks at exactly 5 minutes past the hour (second 0), and \fB\-o 3\fR at exactly 3:00:00\.
+.SH "FIELD SYNTAX"
+Every field (and every entry in a cron string) accepts:
+.TP
+\fBx\fR
+a single value\.
+.TP
+\fB*/x\fR (or \fB/x\fR)
+every value divisible by \fIx\fR (modulus)\.
+.TP
+\fBx\-y\fR (or \fBy\-x\fR)
+every value from \fIx\fR to \fIy\fR (range)\.
+.TP
+\fBx,y\fR
+both \fIx\fR and \fIy\fR (separator)\.
+.TP
+\fB*\fR
+any value\.
+.P
+These can be mixed when separated by commas, so \fB*/a,b,c\-d,/e\fR is valid\. However \fBx\-y\-z\fR, \fB/x/y\fR and \fB/x\-y\fR are not\. Every value must be within the range of its field; \fB400\-4000\fR never works for any field\.
+.SH "CRON STRING"
+The \fB\-\-cron\fR string has up to 7 fields separated by white space:
+.IP "" 4
+.nf
+drift time \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+
+day of week (0 \- 6) (Sunday=0) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+  |
+month (1 \- 12) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+  |  |
+day of month (1 \- 31) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+  |  |  |
+hour (0 \- 23) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+  |  |  |  |
+min (0 \- 59) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+  |  |  |  |  |
+sec (0 \- 59) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+  |  |  |  |  |  |
+                                      |  |  |  |  |  |  |
+                                      *  *  *  *  *  *  *
+.fi
+.IP "" 0
+.P
+Missing fields at the end are filled in with \fB*\fR, so \fB* 5\fR is the same as \fB* 5 * * * * *\fR\.
+.P
+An entry starting with a plus (\fB+\fR) jumps straight to the drift field, so \fB* /5 +60\fR is the same as \fB* /5 * * * * 60\fR\. Nothing may follow the \fB+\fR entry\.
+.P
+With \fB\-\-isc\fR the string is a regular crontab(5) entry instead:
+.IP "" 4
+.nf
+day of week (0 \- 6) (Sunday=0) \-\-\-\-\-\-\-\-\-\-+
+month (1 \- 12) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+   |
+day of month (1 \- 31) \-\-\-\-\-\-\-\-\-\-\-+   |   |
+hour (0 \- 23) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+   |   |   |
+min (0 \- 59) \-\-\-\-\-\-\-\-\-\-\-\-+   |   |   |   |
+                         |   |   |   |   |
+                         *   *   *   *   *
+.fi
+.IP "" 0
+.SH "DRIFTING"
+A drift adds a number of seconds onto the time that was matched\. For example, to wake up on the 1st minute of every 10 minute interval (1, 11, 21, \|\.\|\.\|\., 51) use a minute of \fB*/10\fR with a drift of 60 seconds\.
+.IP "\(bu" 4
+A drift is always measured in seconds and is applied \fIafter\fR the schedule is matched\.
+.IP "\(bu" 4
+A drift can not be given on its own; it needs a schedule to go with it\.
+.IP "\(bu" 4
+A drift can not be longer than the interval of the schedule itself\. Only the remainder is kept, so that no matching time is ever skipped\. With a schedule of every 10 seconds (\fB*/10\fR), a drift of 11 really drifts 1 second, and a drift of 10 does nothing at all\.
+.IP "\(bu" 4
+Inline drifts (in the cron string) accept the separator and range syntax, so \fB0 /5 +15,45\fR unblocks 15 and 45 seconds after every 5th minute\. The modulus (\fB/x\fR) syntax does not apply to drifts\.
+.IP "" 0
+.SH "EXAMPLES"
+Block until the next minute divisible by 10 (0, 10, 20, 30, 40 and 50):
+.IP "" 4
+.nf
+$ dateblock \-n /10
+.fi
+.IP "" 0
+.P
+Block until the next second divisible by 5, but only during hours 3 and 4:
+.IP "" 4
+.nf
+$ dateblock \-c "/5 * 3,4 * * *"
+$ dateblock \-s /5 \-o 3,4
+.fi
+.IP "" 0
+.P
+Block until 5 minutes past the hour (all three are the same):
+.IP "" 4
+.nf
+$ dateblock \-c "* 5"
+$ dateblock \-c "* 5 * * * *"
+$ dateblock \-n 5
+.fi
+.IP "" 0
+.P
+Block until an hour divisible by 5 (0, 5, 10, 15 and 20) on the 1st to the 14th, or the 20th, of the month:
+.IP "" 4
+.nf
+$ dateblock \-o /5 \-d 1\-14,20
+.fi
+.IP "" 0
+.P
+Block until 20 seconds after 5 minutes past the hour:
+.IP "" 4
+.nf
+$ dateblock \-c "* 5 * * * * 20"
+$ dateblock \-c "* 5 +20"
+.fi
+.IP "" 0
+.P
+Block until 9:00 on weekdays, written as a regular crontab entry:
+.IP "" 4
+.nf
+$ dateblock \-i \-c "0 9 * * 1\-5"
+.fi
+.IP "" 0
+.P
+See when a schedule would next run, without waiting:
+.IP "" 4
+.nf
+$ dateblock \-t \-c "0 30 2 * * 0"
+Current Time : 2026\-10\-24 13:05:00 (Sat)
+Block Until  : 2026\-10\-25 02:30:00 (Sun)
+.fi
+.IP "" 0
+.P
+Run a command every 15 minutes, on the quarter hour:
+.IP "" 4
+.nf
+$ while dateblock \-n /15; do \./backup\.sh; done
+.fi
+.IP "" 0
+.SH "EXIT STATUS"
+.TP
+\fB0\fR
+The matching time was reached (or, with \fB\-\-test\fR, was worked out)\.
+.TP
+\fB1\fR
+No options were given, the schedule is not valid, or no matching time exists (such as the 31st of February)\.
+.TP
+\fB255\fR
+The command line could not be parsed\.
+.P
+If \fBdateblock\fR is killed before the time is reached (ie: with Ctrl\-C), it exits with the usual status for that signal\.
+.SH "SEE ALSO"
+sleep(1), crontab(5), date(1)
+.SH "AUTHOR"
+Chris Caron <lead2gold@gmail\.com>
+.SH "COPYRIGHT"
+Copyright (C) 2013\-2026 Chris Caron\. License GPLv2+: GNU GPL version 2 or later (https://gnu\.org/licenses/gpl\.html)\.
+.P
+This is free software: you are free to change and redistribute it\. There is NO WARRANTY, to the extent permitted by law\.

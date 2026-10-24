@@ -6,8 +6,12 @@ All notable changes to this project will be documented in this file.
 - libdateblock shared library (with headers and a pkg-config file) that the
 command line tool and Python bindings both use.
 - `make check` runs the unit tests and command line tests.
-- RPM packaging for Fedora and RHEL 9/10: dateblock, dateblock-libs,
-dateblock-devel and python3-dateblock.
+- Packaging for Fedora and RHEL 9/10 (RPM), Debian 13 (.deb) and Arch
+Linux, all kept in packaging/.
+- `make docker-build`, `make docker-rpm`, `make docker-deb`,
+`make docker-arch` and friends build and test everything in a container.
+- The man page now covers every option and is generated from
+packaging/man/dateblock.md.
 
 ### Changed
 - The project has been renamed from datetools to dateblock.

@@ -49,5 +49,5 @@ LIBS="$dateblock_save_LIBS"
 AC_SUBST([BOOST_PROGRAM_OPTIONS_LIBS], [-lboost_program_options])
 AC_LANG_POP([C++])
 
-AC_CONFIG_FILES([Makefile src/Makefile man/Makefile dateblock.pc])
+AC_CONFIG_FILES([Makefile src/Makefile dateblock.pc])
 AC_OUTPUT
