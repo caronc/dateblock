@@ -29,9 +29,3 @@ bin_PROGRAMS = dateblock
 dateblock_SOURCES = dateblock.cpp dateblock.h
 dateblock_LDADD = libdateblock.la $(BOOST_PROGRAM_OPTIONS_LIBS)
 
-# 'make check'
-check_PROGRAMS = unittest
-unittest_SOURCES = unittest.cpp
-unittest_LDADD = libdateblock.la
-dist_check_SCRIPTS = cli-test.sh
-TESTS = unittest cli-test.sh

@@ -42,23 +42,26 @@ make install
 ```
 
 ## Python Bindings
-The Python bindings link against the `libdateblock` library built above, so
-run `make` first:
+The easiest way is from PyPI, which needs nothing else installed:
 ```bash
-pip install ./python
+pip install dateblock
 ```
 
-If you installed libdateblock to `/usr/local` (the default), you may need to
-run `sudo ldconfig` (or add `/usr/local/lib` to `/etc/ld.so.conf.d/`) so the
-library can be found when Python loads the module.
-
-To build the bindings against an already installed libdateblock instead of
-this source tree:
+To build them from your checkout instead (no `./configure` needed; the C++
+code is compiled straight into the Python module):
 ```bash
-CPPFLAGS="$(pkg-config --cflags dateblock)" \
-LDFLAGS="$(pkg-config --libs-only-L dateblock)" \
-   pip install ./python
+pip install .
 ```
+
+To link them against the libdateblock library built above instead (as the
+distribution packages do), run `make` first and then:
+```bash
+DATEBLOCK_SHARED=1 pip install .
+```
+This leaves out the Python `dateblock` command, since `make install`
+already provides the C++ one. If you installed libdateblock to `/usr/local`
+(the default), you may need to run `sudo ldconfig` so the library can be
+found when Python loads the module.
 
 ## Packages (RPM, Debian and Arch Linux)
 Recipes for building RPM (Fedora and RHEL/CentOS/Alma/Rocky 9 and 10),

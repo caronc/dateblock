@@ -27,11 +27,14 @@
 #   make docker-all               build every package listed above
 #   make docker-man               regenerate packaging/man/dateblock.1
 #   make docker-shell             open a shell in the build container
+#   make docker-pypi              build the PyPI source package and wheels
+#   make release                  build everything into dist/release/
 #
 # DISTRO picks the container (f44 by default) for docker-build,
 # docker-rpm and docker-shell; one of: f44 el9 el10 debian13 arch.
 # Results are written to dist/<distro>/.  Set CONTAINER=podman to use
-# podman instead of docker.
+# podman instead of docker.  docker-pypi (and so release) also needs uv
+# (https://docs.astral.sh/uv/) or pipx to run cibuildwheel and twine.
 
 ifneq ($(wildcard Makefile),)
 include Makefile
@@ -106,5 +109,43 @@ docker-shell: docker-image
 	mkdir -p $(DOCKER_OUT)
 	$(DOCKER_RUN) -it -w /src $(DOCKER_IMAGE) /bin/bash
 
+# PyPI: the source package plus Linux wheels (manylinux and musllinux) for
+# every supported Python.  macOS and Windows wheels are built by the
+# GitHub workflow (.github/workflows/wheels.yml).
+CIBUILDWHEEL_VERSION = 4.3.4
+PYPI_OUT = dist/pypi
+PYRUN = $(shell command -v uvx >/dev/null 2>&1 && echo uvx || \
+          { command -v pipx >/dev/null 2>&1 && echo pipx run; })
+
+docker-pypi:
+	@test -n "$(PYRUN)" || \
+	   { echo "docker-pypi needs uv (uvx) or pipx installed."; exit 1; }
+	rm -rf $(PYPI_OUT)
+	$(PYRUN) --from build pyproject-build --sdist --outdir $(PYPI_OUT) .
+	CIBW_CONTAINER_ENGINE=$(notdir $(CONTAINER)) \
+	   $(PYRUN) cibuildwheel==$(CIBUILDWHEEL_VERSION) --platform linux \
+	   --output-dir $(PYPI_OUT) .
+	$(PYRUN) twine check --strict $(PYPI_OUT)/*
+	@echo "PyPI files written to $(PYPI_OUT)/"
+
+# Everything for a release, gathered into dist/release/ with checksums:
+#   dateblock-<version>.tar.gz  the source tarball
+#   pypi/                       upload with: twine upload dist/release/pypi/*
+#   <distro>/                   the RPM, Debian and Arch packages
+release: docker-build docker-all docker-pypi
+	rm -rf dist/release
+	mkdir -p dist/release
+	cp dist/f44/dateblock-*.tar.gz dist/release/
+	cp -r $(PYPI_OUT) dist/release/pypi
+	for d in $(DOCKER_DISTROS); do \
+	   mkdir -p dist/release/$$d; \
+	   find dist/$$d -maxdepth 1 -type f ! -name 'dateblock-*.tar.gz' \
+	      -exec cp {} dist/release/$$d/ \; ; \
+	done
+	cd dist/release && find . -type f ! -name SHA256SUMS | sort | \
+	   xargs sha256sum > SHA256SUMS
+	@echo "Release files written to dist/release/"
+
 .PHONY: docker-image docker-build docker-rpm docker-rpm-all docker-deb \
-        docker-arch docker-all docker-package docker-man docker-shell
+        docker-arch docker-all docker-package docker-man docker-shell \
+        docker-pypi release

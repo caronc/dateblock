@@ -12,10 +12,19 @@ Linux, all kept in packaging/.
 `make docker-arch` and friends build and test everything in a container.
 - The man page now covers every option and is generated from
 packaging/man/dateblock.md.
+- `pip install dateblock` (or `uv tool install dateblock`) installs the
+Python module plus a `dateblock` command with the same options, on Linux,
+macOS and Windows. Wheels are built for Python 3.9 to 3.14.
+- `make docker-pypi` builds the PyPI files; `make release` builds every
+package into dist/release/ with checksums.
+- macOS and Windows support in the library (time and sleep functions).
 
 ### Changed
 - The project has been renamed from datetools to dateblock.
-- Python bindings now target Python 3 (Python 2 is no longer supported).
+- Python bindings now target Python 3 (Python 2 is no longer supported),
+and live in a `dateblock` package (`from dateblock import dateblock` still
+works).
+- The project page on PyPI now renders its Markdown description.
 - Python: an unsupported `ref` value raises `TypeError` (was `SyntaxError`),
 and a cron that can never happen raises `ValueError` (instead of exiting
 the interpreter).

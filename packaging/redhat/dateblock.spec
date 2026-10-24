@@ -83,11 +83,11 @@ autoreconf --force --install
 %make_build
 
 # The Python bindings link against the libdateblock that was just built
-pushd python
+export DATEBLOCK_SHARED=1
 %pyproject_wheel
-popd
 
 %install
+export DATEBLOCK_SHARED=1
 %make_install
 find %{buildroot} -name '*.la' -delete
 %pyproject_install
@@ -115,7 +115,7 @@ export PYTHONPATH=%{buildroot}%{python3_sitearch}
 %{_libdir}/pkgconfig/dateblock.pc
 
 %files -n python3-dateblock
-%{python3_sitearch}/dateblock*.so
+%{python3_sitearch}/dateblock/
 %{python3_sitearch}/dateblock-%{version}.dist-info/
 
 %changelog

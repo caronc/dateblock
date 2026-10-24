@@ -223,17 +223,18 @@ static PyMethodDef DateblockMethods[] =
     {NULL, NULL, 0, NULL}
 };
 
+// Imported by the dateblock package (python/dateblock/__init__.py)
 static struct PyModuleDef dateblockmodule =
 {
     PyModuleDef_HEAD_INIT,
-    "dateblock",
+    "dateblock._dateblock",
     "Cron-like blocking (sleep until a moment in time)",
     -1,
     DateblockMethods
 };
 
 // Register the method table.
-PyMODINIT_FUNC PyInit_dateblock(void)
+PyMODINIT_FUNC PyInit__dateblock(void)
 {
    PyDateTime_IMPORT;
    if (PyDateTimeAPI == NULL)

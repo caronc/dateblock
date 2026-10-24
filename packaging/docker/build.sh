@@ -58,10 +58,15 @@ build)
    make
    TZ=UTC make check
 
-   # Build and test the Python bindings against the library just built
-   (cd python && python3 setup.py -q build_ext --build-lib /tmp/pylib)
-   TZ=UTC LD_LIBRARY_PATH=src/.libs PYTHONPATH=/tmp/pylib \
+   # Test the Python bindings both ways: linked against the library just
+   # built (as the distribution packages do), and with the C++ code built
+   # in (as the PyPI wheels do)
+   DATEBLOCK_SHARED=1 python3 setup.py -q build -b /tmp/pybuild-shared \
+      --build-lib /tmp/pylib-shared
+   TZ=UTC LD_LIBRARY_PATH=src/.libs PYTHONPATH=/tmp/pylib-shared \
       python3 -m unittest discover -v -s python/tests
+   python3 setup.py -q build -b /tmp/pybuild --build-lib /tmp/pylib
+   TZ=UTC PYTHONPATH=/tmp/pylib python3 -m unittest discover -v -s python/tests
 
    make dist
    cp dateblock-$version.tar.gz /out/

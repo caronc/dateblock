@@ -1,11 +1,12 @@
 #!/usr/bin/make -f
-# The C++ library and tool build with autotools; the Python bindings in
-# python/ are built separately with pybuild against that library.
+# The C++ library and tool build with autotools; the Python bindings are
+# then built with pybuild, linked against that library (DATEBLOCK_SHARED).
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 export PYBUILD_NAME = dateblock
+export DATEBLOCK_SHARED = 1
 export TZ = UTC
 
-PYBUILD = --buildsystem=pybuild --sourcedirectory=python
+PYBUILD = --buildsystem=pybuild
 
 %:
 	dh $@

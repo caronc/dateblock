@@ -1,0 +1,5 @@
+# Files the Python source package (sdist) needs on top of what setup.py
+# already pulls in
+include README.md ChangeLog COPYING LICENSE AUTHORS configure.ac
+include src/Date.h
+recursive-include python/tests *.py

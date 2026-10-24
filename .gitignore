@@ -46,10 +46,11 @@ dateblock.pc
 
 # build outputs
 src/dateblock
-src/unittest
+tests/unittest
 dateblock-*.tar.gz
 
 # python
 build/
 __pycache__/
 *.pyc
+wheelhouse/

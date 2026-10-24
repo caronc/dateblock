@@ -24,8 +24,7 @@ build() {
   make
 
   # The Python bindings link against the libdateblock that was just built
-  cd python
-  python -m build --wheel --no-isolation
+  DATEBLOCK_SHARED=1 python -m build --wheel --no-isolation
 }
 
 check() {
@@ -33,7 +32,7 @@ check() {
   TZ=UTC make check
 
   local pylib="$srcdir/pylib"
-  python -m installer --destdir="$pylib" python/dist/*.whl
+  python -m installer --destdir="$pylib" dist/*.whl
   TZ=UTC LD_LIBRARY_PATH="$PWD/src/.libs" \
     PYTHONPATH="$(echo "$pylib"/usr/lib/python3*/site-packages)" \
     python -m unittest discover -v -s python/tests
@@ -50,5 +49,5 @@ package_python-dateblock() {
   pkgdesc='Python bindings for dateblock (cron-style blocking)'
   depends=("dateblock=$pkgver" 'python')
   cd "$pkgbase-$pkgver"
-  python -m installer --destdir="$pkgdir" python/dist/*.whl
+  python -m installer --destdir="$pkgdir" dist/*.whl
 }

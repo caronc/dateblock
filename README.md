@@ -1,4 +1,6 @@
 [![Paypal](https://img.shields.io/badge/paypal-donate-green.svg)](https://www.paypal.com/donate/?hosted_button_id=CR6YF7KLQWQ5E)
+[![PyPI](https://img.shields.io/pypi/v/dateblock.svg)](https://pypi.org/project/dateblock/)
+[![Python](https://img.shields.io/pypi/pyversions/dateblock.svg)](https://pypi.org/project/dateblock/)
 
 Dateblock
 =========
@@ -13,6 +15,21 @@ your calculated time is met (kind of like combining _sleep_ and _ICS Cron_ into 
 
 Python bindings are additionally included supporting all of the standard datetime
 formats and objects!
+
+## Quick Start
+```bash
+# Install the dateblock command and Python module (Linux, macOS and Windows)
+pip install dateblock
+
+# ...or just the command, with uv
+uv tool install dateblock
+
+# When would the next 5th minute start?  (--test shows without waiting)
+dateblock -t -n /5
+```
+
+Packages for Fedora, RHEL/CentOS/Alma/Rocky 9 and 10, Debian and Arch Linux
+can be built from this repository; see [Installation](#installation).
 
 __Syntax__:
 dateblock [options]
@@ -176,7 +193,7 @@ past)
 dateblock -c "* 5 * * * * 20"
 
 # you can rewrite the above like this too:
-dateblock -n 5
+dateblock -n 5 -x 20
 
 # You can skip to the drift portion by just denoting a plus (+) as the last
 # entry specified.  This is interpreted as a drift time.
@@ -232,6 +249,14 @@ A few things worth knowing:
   (`KeyboardInterrupt`) works as expected.
 
 ## Installation
+### From PyPI
+```bash
+pip install dateblock
+```
+This gives you the `dateblock` command and the Python module on Linux, macOS
+and Windows. The command takes the same options as described above.
+
+### From Source
 Assuming you have a C++ compiler, the Boost `program_options` library and
 the standard development tools that usually go with it (make, autoconf,
 automake and libtool), then the following will install everything for you.
@@ -250,9 +275,10 @@ This installs:
   `pkg-config`.
 - The `dateblock` command line tool.
 
-The Python bindings are built separately (after running `make`):
+To build the Python bindings from your checkout (this compiles the C++ code
+straight into the Python module):
 ```bash
-pip install ./python
+pip install .
 ```
 
 ### Building with Docker
@@ -281,5 +307,5 @@ make docker-shell
 - Podman is used if Docker isn't installed; set `CONTAINER=podman` to
   prefer it.
 
-See [packaging/README.md](packaging/README.md) for the details on each
-package format, and [INSTALL.md](INSTALL.md) for building from source.
+See [packaging/README.md](https://github.com/caronc/dateblock/blob/master/packaging/README.md) for the details on each
+package format, and [INSTALL.md](https://github.com/caronc/dateblock/blob/master/INSTALL.md) for building from source.

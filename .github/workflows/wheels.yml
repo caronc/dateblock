@@ -1,0 +1,71 @@
+# Builds the PyPI source package and wheels for Linux, macOS and Windows.
+#  - Runs on every push and pull request (to make sure everything builds).
+#  - Publishing a GitHub release also uploads the files to PyPI, using
+#    PyPI trusted publishing (no API token needed; see packaging/README.md).
+name: Wheels
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  wheels:
+    name: Wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # ubuntu-24.04-arm builds the aarch64 Linux wheels natively;
+        # macos-latest builds both arm64 and x86_64 macOS wheels
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build and test wheels
+        uses: pypa/cibuildwheel@v4.3.4
+        env:
+          CIBW_ARCHS_MACOS: x86_64 arm64
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wheels-${{ matrix.os }}
+          path: ./wheelhouse/*.whl
+
+  sdist:
+    name: Source package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build source package
+        run: pipx run build --sdist
+
+      - name: Check the PyPI page will render
+        run: pipx run twine check --strict dist/*
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+
+  publish:
+    name: Publish to PyPI
+    if: github.event_name == 'release' && github.event.action == 'published'
+    needs: [wheels, sdist]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/dateblock
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: pypa/gh-action-pypi-publish@v1.14.3

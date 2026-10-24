@@ -1,6 +1,6 @@
 ACLOCAL_AMFLAGS = -I m4
 AUTOMAKE_OPTIONS = foreign
-SUBDIRS = src
+SUBDIRS = src tests
 
 pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = dateblock.pc
@@ -35,7 +35,13 @@ EXTRA_DIST = \
 	packaging/docker/Dockerfile.el10 \
 	packaging/docker/Dockerfile.debian13 \
 	packaging/docker/Dockerfile.arch \
-	python/pyproject.toml \
-	python/setup.py \
-	python/dateblockmodule.cpp \
-	python/tests/test_dateblock.py
+	.github/workflows/wheels.yml \
+	pyproject.toml \
+	setup.py \
+	MANIFEST.in \
+	python/_dateblock.cpp \
+	python/dateblock/__init__.py \
+	python/dateblock/__main__.py \
+	python/dateblock/cli.py \
+	python/tests/test_dateblock.py \
+	python/tests/test_cli.py

@@ -31,6 +31,14 @@
 #include <stdexcept>
 #include "Date.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <sys/time.h>
+#endif
+
 #ifdef DEBUG
 #include <iostream>
 #endif
@@ -57,13 +65,39 @@ namespace {
    //  - A '+N' entry (dateblock format only) jumps straight to the drift
    //    field; nothing may follow it.
    //  - Returns false if the string has more fields than allowed.
-   // The current time in whole seconds.  This reads the same clock that
-   // BlockUntil() sleeps on; time() can lag it by a few milliseconds, which
-   // is enough to think we are still in the previous second.
+   // Thread safe localtime() (Windows spells it localtime_s)
+   bool LocalTime(time_t tVal, struct tm& tmOut)
+   {
+   #ifdef _WIN32
+      return localtime_s(&tmOut, &tVal) == 0;
+   #else
+      return localtime_r(&tVal, &tmOut) != NULL;
+   #endif
+   }
+
+   // The current time (to the nanosecond where available).  This reads the
+   // same clock that BlockUntil() sleeps on; time() can lag it by a few
+   // milliseconds, which is enough to think we are still in the previous
+   // second.
+   void NowPrecise(struct timespec& ts)
+   {
+   #if defined(_WIN32)
+      timespec_get(&ts, TIME_UTC);
+   #elif defined(__APPLE__)
+      struct timeval tv;
+      gettimeofday(&tv, NULL);
+      ts.tv_sec = tv.tv_sec;
+      ts.tv_nsec = tv.tv_usec * 1000;
+   #else
+      clock_gettime(CLOCK_REALTIME, &ts);
+   #endif
+   }
+
+   // The current time in whole seconds
    time_t Now()
    {
       struct timespec ts;
-      clock_gettime(CLOCK_REALTIME, &ts);
+      NowPrecise(ts);
       return ts.tv_sec;
    }
 
@@ -220,7 +254,7 @@ const Date & Date::operator=(const Date& right)
 const Date & Date::operator=(const time_t &right)
 {
    m_time = right;
-   localtime_r(&m_time, &m_tmObj);
+   LocalTime(m_time, m_tmObj);
    return (*this);
 }
 
@@ -244,7 +278,7 @@ const Date & Date::operator=(const struct tm &right)
 void Date::Set()
 {
    m_time=Now();
-   localtime_r(&m_time, &m_tmObj);
+   LocalTime(m_time, m_tmObj);
 }
 
 //------------------------------------------------
@@ -256,7 +290,7 @@ void Date::Set(int year, int mon, int day,
                int hour, int min, int sec)
 {
    m_time=Now();
-   localtime_r(&m_time, &m_tmObj);
+   LocalTime(m_time, m_tmObj);
 
    // Start on the 1st so that changing the month can't roll over into
    // the next one (ie: today is the 31st and the new month has 30 days)
@@ -291,7 +325,7 @@ void Date::Set(const Date& dObj)
 void Date::Set(const time_t &tVal)
 {
    m_time = tVal;
-   localtime_r(&m_time, &m_tmObj);
+   LocalTime(m_time, m_tmObj);
 }
 
 //------------------------------------------------
@@ -420,7 +454,7 @@ const bool Date::AddSec(const int seconds)
    // Aquire Time Now
    struct tm tmTime;
    time_t tTmp=mktime(&m_tmObj)+seconds;
-   if (localtime_r(&tTmp, &tmTime) == NULL)
+   if (!LocalTime(tTmp, tmTime))
    {
       return false;
    }
@@ -440,7 +474,7 @@ const bool Date::AddMin(const int minutes)
    // Aquire Time Now
    struct tm tmTime;
    time_t tTmp=mktime(&m_tmObj)+(time_t)minutes*60;
-   if (localtime_r(&tTmp, &tmTime) == NULL)
+   if (!LocalTime(tTmp, tmTime))
    {
       return false;
    }
@@ -460,7 +494,7 @@ const bool Date::AddHour(const int hours)
    // Aquire Time Now
    struct tm tmTime;
    time_t tTmp=mktime(&m_tmObj)+(time_t)hours*3600;
-   if (localtime_r(&tTmp, &tmTime) == NULL)
+   if (!LocalTime(tTmp, tmTime))
    {
       return false;
    }
@@ -482,7 +516,7 @@ const bool Date::AddDOM(const int days)
    // Aquire Time Now
    struct tm tmTime;
    time_t tTmp=mktime(&m_tmObj)+(time_t)days*86400;
-   if (localtime_r(&tTmp, &tmTime) == NULL)
+   if (!LocalTime(tTmp, tmTime))
    {
       return false;
    }
@@ -1577,6 +1611,7 @@ size_t Date::Tokenize(const string& strIn,
 //------------------------------------------------
 unsigned long Date::BlockUntil(const Date& until)
 {
+#if !defined(_WIN32) && !defined(__APPLE__)
    struct timespec target;
    target.tv_sec = until.Time();
    target.tv_nsec = 0;
@@ -1589,4 +1624,29 @@ unsigned long Date::BlockUntil(const Date& until)
       return (until.Time() > now) ? (unsigned long)(until.Time() - now) : 0;
    }
    return 0;
+#else
+   // macOS and Windows can't sleep until an exact time, so sleep for
+   // whatever is left instead.  Sleep at most a second at a time so that
+   // Ctrl-C is noticed quickly; the caller loops until we return 0.
+   struct timespec now;
+   NowPrecise(now);
+   if (now.tv_sec >= until.Time())
+   {
+      return 0;
+   }
+
+   double left = (double)(until.Time() - now.tv_sec) - now.tv_nsec / 1e9;
+   double chunk = (left > 1.0) ? 1.0 : left;
+#ifdef _WIN32
+   Sleep((DWORD)(chunk * 1000.0) + 1);
+#else
+   struct timespec rel;
+   rel.tv_sec = (time_t)chunk;
+   rel.tv_nsec = (long)((chunk - (double)rel.tv_sec) * 1e9);
+   nanosleep(&rel, NULL);
+#endif
+
+   time_t after = Now();
+   return (until.Time() > after) ? (unsigned long)(until.Time() - after) : 0;
+#endif
 }

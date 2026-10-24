@@ -214,8 +214,9 @@ class Date
      // Sleeps until the wall clock reaches 'until'.
      //  - Returns 0 once that moment arrives (or right away if it has
      //    already passed).
-     //  - Returns the number of seconds still left if a signal woke us
-     //    up early.
+     //  - Otherwise returns the number of seconds still left; call it again
+     //    to keep waiting.  This happens when a signal wakes us up early,
+     //    and (on macOS and Windows) after every second of sleep.
      static unsigned long BlockUntil(const Date& until);
 
    private:
