@@ -1,0 +1,5 @@
+# The images only need the packaging recipes (to install build requirements)
+*
+!packaging/redhat/dateblock.spec
+!packaging/debian
+!packaging/arch/PKGBUILD

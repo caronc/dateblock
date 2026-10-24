@@ -1,8 +1,8 @@
 /*
- Datetools provide a method of manipulating and working dates and times.
+ Dateblock blocks (sleeps) until a cron-style moment in time.
  Copyright (C) 2013-2018 Chris Caron <lead2gold@gmail.com>
 
- This file is part of Datetools.  Datetools is free software; you can
+ This file is part of Dateblock.  Dateblock is free software; you can
  redistribute it and/or modify it under the terms of the GNU General Public
  License as published by the Free Software Foundation; either version 2 of
  the License, or (at your option) any later version.
@@ -23,32 +23,123 @@
 #include <time.h>
 #include <string.h>
 #include <limits.h>
+#include <errno.h>
 #include <set>
 #include <vector>
 #include <ctype.h>
 #include <sstream>
-#include <iomanip>
+#include <stdexcept>
 #include "Date.h"
 
-#include <boost/tokenizer.hpp>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <sys/time.h>
+#endif
 
-// Boost Character Tokenizer Simplified
-typedef boost::tokenizer<boost::char_separator<char> > tokenizer;
+#ifdef DEBUG
+#include <iostream>
+#endif
+
+// How many passes Cron() may take before giving up on finding a match
+#ifndef CRON_ASSERT_LOOP_LIMIT
+#define CRON_ASSERT_LOOP_LIMIT 400
+#endif
 
 using namespace std;
 
 namespace {
-   // locale’s abbreviated weekday name
-   const char dayAbbreva[7][4] =
-       {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
-   const int Sun2Mon[7] =
-      {7,1,2,3,4,5,6};
-   const char dayOfWeek[7][10] =
-      {"Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"};
-   const char monAbbrev[12][4] =
-      {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
-   const char monOfYear[12][10] =
-      {"January","February","March","April","May","June","July","August","September","October","November","December"};
+   // Number of days in a month (month is 0-11, year is the full year)
+   int DaysInMonth(int year, int month)
+   {
+      static const int days[12] =
+         {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+      bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+      return (month == 1 && leap) ? 29 : days[month];
+   }
+
+   // Splits a whitespace separated cron string into its fields.
+   //  - Missing fields are filled in with '*'.
+   //  - A '+N' entry (dateblock format only) jumps straight to the drift
+   //    field; nothing may follow it.
+   //  - Returns false if the string has more fields than allowed.
+   // Thread safe localtime() (Windows spells it localtime_s)
+   bool LocalTime(time_t tVal, struct tm& tmOut)
+   {
+   #ifdef _WIN32
+      return localtime_s(&tmOut, &tVal) == 0;
+   #else
+      return localtime_r(&tVal, &tmOut) != NULL;
+   #endif
+   }
+
+   // The current time (to the nanosecond where available).  This reads the
+   // same clock that BlockUntil() sleeps on; time() can lag it by a few
+   // milliseconds, which is enough to think we are still in the previous
+   // second.
+   void NowPrecise(struct timespec& ts)
+   {
+   #if defined(_WIN32)
+      timespec_get(&ts, TIME_UTC);
+   #elif defined(__APPLE__)
+      struct timeval tv;
+      gettimeofday(&tv, NULL);
+      ts.tv_sec = tv.tv_sec;
+      ts.tv_nsec = tv.tv_usec * 1000;
+   #else
+      clock_gettime(CLOCK_REALTIME, &ts);
+   #endif
+   }
+
+   // The current time in whole seconds
+   time_t Now()
+   {
+      struct timespec ts;
+      NowPrecise(ts);
+      return ts.tv_sec;
+   }
+
+   bool SplitCronString(const string& strIn, bool isISC,
+                        vector<string>& tokens)
+   {
+      // ISC only processes the first 5 fields, where as
+      // otherwise we process the first 7
+      size_t token_max = isISC?Date::ISC_CRON_FIELD_COUNT:
+                               Date::DBL_CRON_FIELD_COUNT;
+      bool ok = true;
+      bool drifted = false;
+      string token;
+      istringstream in(strIn);
+
+      tokens.clear();
+      while (in >> token)
+      {
+         if (drifted || tokens.size() >= token_max)
+         {
+            // More entries then expected found
+            ok = false;
+            break;
+         }
+
+         if (!isISC && token[0] == '+')
+         {
+            // drift entry; fill in our blanks first
+            while (tokens.size() < (token_max-1))
+               tokens.push_back("*");
+            token.erase(0, 1);
+            drifted = true;
+         }
+         tokens.push_back(token);
+      }
+
+      // Placeholders
+      while (tokens.size() < token_max)
+         tokens.push_back("*");
+
+      return ok;
+   }
 }
 
 // Limits
@@ -163,8 +254,7 @@ const Date & Date::operator=(const Date& right)
 const Date & Date::operator=(const time_t &right)
 {
    m_time = right;
-   struct tm* tmPtr=localtime(&m_time);
-   memcpy(&m_tmObj,tmPtr,sizeof(struct tm));
+   LocalTime(m_time, m_tmObj);
    return (*this);
 }
 
@@ -187,9 +277,8 @@ const Date & Date::operator=(const struct tm &right)
 //------------------------------------------------
 void Date::Set()
 {
-   m_time=time((time_t *) NULL);
-   struct tm* tmPtr=localtime(&m_time);
-   memcpy(&m_tmObj,tmPtr,sizeof(struct tm));
+   m_time=Now();
+   LocalTime(m_time, m_tmObj);
 }
 
 //------------------------------------------------
@@ -200,9 +289,12 @@ void Date::Set()
 void Date::Set(int year, int mon, int day,
                int hour, int min, int sec)
 {
-   m_time=time((time_t *) NULL);
-   struct tm* tmPtr=localtime(&m_time);
-   memcpy(&m_tmObj,tmPtr,sizeof(struct tm));
+   m_time=Now();
+   LocalTime(m_time, m_tmObj);
+
+   // Start on the 1st so that changing the month can't roll over into
+   // the next one (ie: today is the 31st and the new month has 30 days)
+   m_tmObj.tm_mday = T_DOM_MIN;
 
    // Now Set Defaults
    SetYear(year);
@@ -233,8 +325,7 @@ void Date::Set(const Date& dObj)
 void Date::Set(const time_t &tVal)
 {
    m_time = tVal;
-   struct tm* tmPtr=localtime(&m_time);
-   memcpy(&m_tmObj,tmPtr,sizeof(struct tm));
+   LocalTime(m_time, m_tmObj);
 }
 
 //------------------------------------------------
@@ -315,24 +406,7 @@ const bool Date::operator>=(const Date& right) const
 //------------------------------------------------
 const int Date::MaxDOMsThisMonth() const
 {
-   struct tm* tmPtr;
-   struct tm tmTime;
-   time_t tTmp;
-   memcpy(&tmTime,&m_tmObj,sizeof(struct tm));
-   if(tmTime.tm_mon ==11)
-   {
-      tmTime.tm_mon=0;
-      tmTime.tm_year++;
-   }
-   else
-   {
-      tmTime.tm_mon++;
-   }
-   tmTime.tm_mday=1;
-   tTmp=mktime(&tmTime);
-   tTmp-=86400; // Take off 1 DOM
-   tmPtr = localtime(&tTmp);
-   return tmPtr->tm_mday;
+   return DaysInMonth(m_tmObj.tm_year + 1900, m_tmObj.tm_mon);
 }
 
 //------------------------------------------------
@@ -342,24 +416,14 @@ const int Date::MaxDOMsThisMonth() const
 //------------------------------------------------
 const int Date::MaxDOMsNextMonth() const
 {
-   struct tm* tmPtr;
-   struct tm tmTime;
-   time_t tTmp;
-   memcpy(&tmTime,&m_tmObj,sizeof(struct tm));
-   if(tmTime.tm_mon ==10)
+   int month = m_tmObj.tm_mon + 1;
+   int year = m_tmObj.tm_year + 1900;
+   if (month > 11)
    {
-      tmTime.tm_mon=0;
-      tmTime.tm_year+=2;
+      month = 0;
+      year++;
    }
-   else
-   {
-      tmTime.tm_mon+=2;
-   }
-   tmTime.tm_mday=1;
-   tTmp=mktime(&tmTime);
-   tTmp-=86400; // Take off 1 DOM
-   tmPtr = localtime(&tTmp);
-   return tmPtr->tm_mday;
+   return DaysInMonth(year, month);
 }
 
 //------------------------------------------------
@@ -369,25 +433,14 @@ const int Date::MaxDOMsNextMonth() const
 //------------------------------------------------
 const int Date::MaxDOMsPrevMonth() const
 {
-   struct tm* tmPtr;
-   struct tm tmTime;
-   time_t tTmp;
-   memcpy(&tmTime,&m_tmObj,sizeof(struct tm));
-   if(tmTime.tm_mon == 0)
+   int month = m_tmObj.tm_mon - 1;
+   int year = m_tmObj.tm_year + 1900;
+   if (month < 0)
    {
-      tmTime.tm_mon=11;
-      tmTime.tm_year--;
+      month = 11;
+      year--;
    }
-   else
-   {
-      tmTime.tm_mon--;
-   }
-   tmTime.tm_mday=1;
-
-   tTmp=mktime(&tmTime);
-   tTmp-=86400; // Take off 1 DOM
-   tmPtr = localtime(&tTmp);
-   return tmPtr->tm_mday;
+   return DaysInMonth(year, month);
 }
 
 
@@ -399,16 +452,15 @@ const int Date::MaxDOMsPrevMonth() const
 const bool Date::AddSec(const int seconds)
 {
    // Aquire Time Now
-   struct tm *tmPtr;
+   struct tm tmTime;
    time_t tTmp=mktime(&m_tmObj)+seconds;
-   tmPtr = localtime(&tTmp);
-   if (tmPtr == NULL)
+   if (!LocalTime(tTmp, tmTime))
    {
       return false;
    }
 
    m_time=tTmp;
-   memcpy(&m_tmObj,tmPtr,sizeof(struct tm));
+   m_tmObj = tmTime;
    return true;
 }
 
@@ -420,16 +472,15 @@ const bool Date::AddSec(const int seconds)
 const bool Date::AddMin(const int minutes)
 {
    // Aquire Time Now
-   struct tm *tmPtr;
-   time_t tTmp=mktime(&m_tmObj)+(minutes*60);
-   tmPtr = localtime(&tTmp);
-   if (tmPtr == NULL)
+   struct tm tmTime;
+   time_t tTmp=mktime(&m_tmObj)+(time_t)minutes*60;
+   if (!LocalTime(tTmp, tmTime))
    {
       return false;
    }
 
    m_time=tTmp;
-   memcpy(&m_tmObj,tmPtr,sizeof(struct tm));
+   m_tmObj = tmTime;
    return true;
 }
 
@@ -441,10 +492,9 @@ const bool Date::AddMin(const int minutes)
 const bool Date::AddHour(const int hours)
 {
    // Aquire Time Now
-   struct tm *tmPtr;
-   time_t tTmp=mktime(&m_tmObj)+(hours*3600);
-   tmPtr = localtime(&tTmp);
-   if (tmPtr == NULL)
+   struct tm tmTime;
+   time_t tTmp=mktime(&m_tmObj)+(time_t)hours*3600;
+   if (!LocalTime(tTmp, tmTime))
    {
       return false;
    }
@@ -452,7 +502,7 @@ const bool Date::AddHour(const int hours)
    // Store new time_t type
    m_time = tTmp;
    // Store struct tm type
-   memcpy(&m_tmObj,tmPtr,sizeof(struct tm));
+   m_tmObj = tmTime;
    return true;
 }
 
@@ -464,16 +514,15 @@ const bool Date::AddHour(const int hours)
 const bool Date::AddDOM(const int days)
 {
    // Aquire Time Now
-   struct tm *tmPtr;
-   time_t tTmp=mktime(&m_tmObj)+(days*86400);
-   tmPtr = localtime(&tTmp);
-   if (tmPtr == NULL )
+   struct tm tmTime;
+   time_t tTmp=mktime(&m_tmObj)+(time_t)days*86400;
+   if (!LocalTime(tTmp, tmTime))
    {
       return false;
    }
 
    m_time=tTmp;
-   memcpy(&m_tmObj,tmPtr,sizeof(struct tm));
+   m_tmObj = tmTime;
    return true;
 }
 
@@ -664,90 +713,27 @@ const bool Date::SetYear(const int years)
 //  Function: Str
 //
 //------------------------------------------------
-const string Date::Str(const string& strFormatIn) const
+const string Date::Str(const string& strFormat) const
 {
-   string strFormat=strFormatIn;
+   if (strFormat.empty())
+   {
+      return string();
+   }
 
-   // Syntax Swapping
-   // ---------------
-   // Support %c     locale’s date and time (e.g., Thu Mar  3 23:05:25 2005)
-   FindAndReplace(strFormat,"%c","%a %b %d %H:%M:%S %Y");
-   // Support %D     date; same as %m/%d/%y
-   FindAndReplace(strFormat,"%D","%m/%d/%y");
-   // Support %r     locale’s 12-hour clock time (e.g., 11:11:04 PM)
-   FindAndReplace(strFormat,"%r","%H:%M:%S %p");
-   // Support %R     24-hour hour and minute; same as %H:%M
-   FindAndReplace(strFormat,"%R","%H:%M");
-   // Support %T     time; same as %H:%M:%S
-   FindAndReplace(strFormat,"%T","%H:%M:%S");
-   // Support %t     a tab
-   FindAndReplace(strFormat,"%t","\t");
-   // Support %n     a new line
-   FindAndReplace(strFormat,"%n","\n");
-   // Support %h     a new line
-   FindAndReplace(strFormat,"%h","\n");
-   // Support %x     locale’s date representation (e.g., 12/31/99)
-   FindAndReplace(strFormat,"%x","%M/%d/%y");
-   // Support %X     locale’s time representation (e.g., 23:13:48)
-   FindAndReplace(strFormat,"%X","%H/%M/%S");
-
-   // Build Year into String (to ease handling)
-   string strYear;
-   stringstream ss;
-   ss << (m_tmObj.tm_year+1900);
-   strYear= ss.str();
-
-
-   // Date Swapping
-   // ---------------
-   // Support %a     locale’s abbreviated weekday name (e.g., Sun)
-   FindAndReplace(strFormat,"%a",dayAbbreva[m_tmObj.tm_wday]);
-   // Support %A     locale’s full weekday name (e.g., Sunday)
-   FindAndReplace(strFormat,"%A",dayOfWeek[m_tmObj.tm_wday]);
-   // Support %b     locale’s abbreviated month name (e.g., Jan)
-   FindAndReplace(strFormat,"%b",monAbbrev[m_tmObj.tm_mon]);
-   // Support %B     locale’s full month name (e.g., January)
-   FindAndReplace(strFormat,"%B",monOfYear[m_tmObj.tm_mon]);
-   // Support %C     century; like %Y, except omit last two digits (e.g., 21)
-   FindAndReplace(strFormat,"%C",strYear.substr(0,2));
-   // Support %d     day of month (e.g, 01)
-   FindAndReplace(strFormat,"%d",m_tmObj.tm_mday,2);
-   // Support %H     hour (00..23)
-   FindAndReplace(strFormat,"%H",m_tmObj.tm_hour,2);
-   // Support %I     hour (01..12)
-   FindAndReplace(strFormat,"%I",(m_tmObj.tm_hour>11)?
-         ((m_tmObj.tm_hour+1)/12):(m_tmObj.tm_hour+1),2);
-   // Support %j     day of year (001..366)
-   FindAndReplace(strFormat,"%j",(m_tmObj.tm_yday)/12,3);
-   // Support %k     hour ( 0..23)
-   FindAndReplace(strFormat,"%k",m_tmObj.tm_hour,2,' ');
-   // Support %l     hour ( 1..12)
-   FindAndReplace(strFormat,"%l",(m_tmObj.tm_hour>11)?
-         ((m_tmObj.tm_hour+1)/12):(m_tmObj.tm_hour+1),2,' ');
-   // Support %m     month (00..59)
-   FindAndReplace(strFormat,"%m",(m_tmObj.tm_mon+1),2);
-   // Support %M     minute (00..59)
-   FindAndReplace(strFormat,"%M",(m_tmObj.tm_min),2);
-   // Support %p     locale’s equivalent of either AM or PM; blank if not known
-   FindAndReplace(strFormat,"%p",((m_tmObj.tm_hour>11)?"PM":"AM"));
-   // Support %P     like %p, but lower case
-   FindAndReplace(strFormat,"%P",((m_tmObj.tm_hour>11)?"pm":"pm"));
-   // Support %S     second (00..60)
-   FindAndReplace(strFormat,"%S",(m_tmObj.tm_sec),2);
-   // Support %s     seconds since 1970-01-01 00:00:00 UTC
-   FindAndReplace(strFormat,"%s",m_time,2);
-   // Support %u     day of week (1..7); 1 is Monday
-   FindAndReplace(strFormat,"%u",Sun2Mon[m_tmObj.tm_wday],2);
-   // Support %U     week number of year, with Sunday as first day of week (00..53)
-   FindAndReplace(strFormat,"%U",m_tmObj.tm_yday%7,2);
-   // Support %w     day of week (0..6); 0 is Sunday;
-   FindAndReplace(strFormat,"%w",m_tmObj.tm_wday);
-   // Support %y     last two digits of year (00..99)
-   FindAndReplace(strFormat,"%y",strYear.substr(2,2));
-   // Support %Y     year
-   FindAndReplace(strFormat,"%Y",(m_tmObj.tm_year)+1900,4);
-
-   return strFormat;
+   // strftime() returns 0 when the buffer is too small, so keep growing
+   // it until the result fits.  Give up (returning an empty string) for
+   // formats that genuinely produce nothing or are absurdly large.
+   vector<char> buf(256);
+   while (buf.size() <= 65536)
+   {
+      size_t len = strftime(&buf[0], buf.size(), strFormat.c_str(), &m_tmObj);
+      if (len > 0)
+      {
+         return string(&buf[0], len);
+      }
+      buf.resize(buf.size() * 2);
+   }
+   return string();
 }
 
 //------------------------------------------------
@@ -848,23 +834,22 @@ const Date Date::Cron(int lSecOffset,
    {
    #ifdef CRON_ASSERT_LOOP_LIMIT
       if(cron_limit == 0){
-         cerr << "FATAL:"
-              << " CRON_ASSERT_LOOP_LIMIT ("
-              << CRON_ASSERT_LOOP_LIMIT
-              << ") reached."
-              << " CRON='"
-              << lSecOffset
-              << " " << lMinOffset
-              << " " << lHourOffset
-              << " " << lDomOffset
-              << " " << lMonthOffset
-              << " " << lDowOffset
-              << " " << lDriftOffset
-              << "'"
-              << ", REF=" << dObjRef.Str()
-              << endl;
-         // Fail; there is a system problem!
-         exit(1);
+         // No moment in time matches this cron (ie: February 31st)
+         ostringstream msg;
+         msg << "CRON_ASSERT_LOOP_LIMIT ("
+             << CRON_ASSERT_LOOP_LIMIT
+             << ") reached."
+             << " CRON='"
+             << lSecOffset
+             << " " << lMinOffset
+             << " " << lHourOffset
+             << " " << lDomOffset
+             << " " << lMonthOffset
+             << " " << lDowOffset
+             << " " << lDriftOffset
+             << "'"
+             << ", REF=" << dObjRef.Str();
+         throw runtime_error(msg.str());
       }
       // Decrement Limit Counter
       cron_limit--;
@@ -1234,43 +1219,12 @@ bool Date::CronValid(const string& strIn, bool isISC)
    //     -  -  -  -  -
    //     *  *  *  *  *
 
-   // Whitespace Separators
-   boost::char_separator<char> sep(" \t\n\r\v\f");
-   tokenizer tokens(strIn, sep);
-   // ISC only processes the first 5 fields, where as
-   // otherwise we process the first 7
-   size_t token_max = isISC?ISC_CRON_FIELD_COUNT:DBL_CRON_FIELD_COUNT;
-
    vector<string> v_tokens;
-   tokenizer::iterator tok_iter = tokens.begin();
-   for (;tok_iter != tokens.end(); ++tok_iter)
+   if (!SplitCronString(strIn, isISC, v_tokens))
    {
-      if (v_tokens.size() >= token_max)
-      {
-        // More entries then expected found
-        return false;
-      }
-
-      // Look for a + as that signifies the drift entry
-      // The idea here is we want to be able to put +digit
-      // anywhere in our cron to just imediately interpret
-      // that value as a drift.
-      if (isISC == false && (*tok_iter)[0] == '+')
-      {
-         // drift entry
-         //
-         // first fill in our blanks
-         while ( v_tokens.size() < (token_max-1) )
-            v_tokens.insert(v_tokens.end(), "*");
-         // lastly insert our drift entry which is the last entry
-         v_tokens.insert(v_tokens.end(), &(*tok_iter)[1]);
-      }
-      v_tokens.insert(v_tokens.end(), *tok_iter);
+      // More entries then expected found
+      return false;
    }
-
-   // Placeholders
-   while ( v_tokens.size() < token_max )
-      v_tokens.insert(v_tokens.end(), "*");
 
    // Convert to expected format
    return isISC?
@@ -1320,6 +1274,8 @@ const Date Date::Cron(const string& sSecOffset,
 
       // Date Object to Hold on to the lowest reference point
       Date dObjRef(dObjFinish);
+      bool bFound = false;
+      string sError;
 
       // Big On7 unfortunately.  Perhaps this section could be
       // more smarter and only handle obviously newer times and skip
@@ -1345,23 +1301,32 @@ const Date Date::Cron(const string& sSecOffset,
                         itrDrift  = comboList[COMBO_DRIFT].begin();
                         for(;itrDrift != comboList[COMBO_DRIFT].end();itrDrift++)
                         {
-                           // Build Reference Point
-                           dObjRef=Cron(*itrSec,
-                                        *itrMin,
-                                        *itrHour,
-                                        *itrDom,
-                                        *itrMonth,
-                                        *itrDow,
-                                        *itrDrift);
+                           // Build Reference Point; a combination that
+                           // can never happen (ie: Feb 30th) is skipped
+                           // as long as another one works out
+                           try
+                           {
+                              dObjRef=Cron(*itrSec,
+                                           *itrMin,
+                                           *itrHour,
+                                           *itrDom,
+                                           *itrMonth,
+                                           *itrDow,
+                                           *itrDrift);
+                           }
+                           catch (const runtime_error& e)
+                           {
+                              sError = e.what();
+                              continue;
+                           }
 
-                           // Store Value if nessisary
-                           if(dObjRef < dObjFinish)
+                           // Store Value if nessisary (the first match
+                           // is always stored)
+                           if(!bFound || dObjRef < dObjFinish)
+                           {
                               dObjFinish = dObjRef;
-
-                           // First time Entry; Store reference
-                           // reguardless
-                           else if(dObjFinish == *this)
-                              dObjFinish = dObjRef;
+                              bFound = true;
+                           }
 
                         } // Drift
                      } // Day of Week
@@ -1370,6 +1335,12 @@ const Date Date::Cron(const string& sSecOffset,
             } // Hours
          } // Minutes
       } // Seconds
+
+      if (!bFound && !sError.empty())
+      {
+         // Not one of the combinations could be matched
+         throw runtime_error(sError);
+      }
    } // Valid Parsing
 
    return dObjFinish;
@@ -1406,43 +1377,10 @@ const Date Date::Cron(const string& strIn, bool isISC) const
    //     -  -  -  -  -
    //     *  *  *  *  *
 
-   // Whitespace Separators
-   boost::char_separator<char> sep(" \t\n\r\v\f");
-   tokenizer tokens(strIn, sep);
-   // ISC only processes the first 5 fields, where as
-   // otherwise we process the first 6
-   size_t token_max = isISC?ISC_CRON_FIELD_COUNT:DBL_CRON_FIELD_COUNT;
-
+   // Any fields beyond what is allowed are simply ignored here;
+   // CronValid() is what reports them as an error
    vector<string> v_tokens;
-   for (tokenizer::iterator tok_iter = tokens.begin();
-      tok_iter != tokens.end(); ++tok_iter)
-   {
-      if (v_tokens.size() > token_max)
-      {
-         // no more entries
-         break;
-      }
-
-      // Look for a + as that signifies the drift entry
-      // The idea here is we want to be able to put +digit
-      // anywhere in our cron to just imediately interpret
-      // that value as a drift.
-      if (isISC == false && (*tok_iter)[0] == '+')
-      {
-         // drift entry
-         //
-         // first fill in our blanks
-         while ( v_tokens.size() < (token_max-1) )
-            v_tokens.insert(v_tokens.end(), "*");
-         // lastly insert our drift entry which is the last entry
-         v_tokens.insert(v_tokens.end(), &(*tok_iter)[1]);
-      }
-      v_tokens.insert(v_tokens.end(), *tok_iter);
-   }
-
-   // Placeholders
-   while ( v_tokens.size() < token_max )
-      v_tokens.insert(v_tokens.end(), "*");
+   SplitCronString(strIn, isISC, v_tokens);
 
    #ifdef DEBUG
    cerr << "DEBUG Date::Cron("
@@ -1661,69 +1599,54 @@ size_t Date::Tokenize(const string& strIn,
    return tokens.size();
 }
 
-//--------------------------------------------------
+//------------------------------------------------
 //
-//  Function: FindAndReplace
+//  Function: BlockUntil
+//
+//  Desc: Sleeps until the wall clock reaches a specific moment.  Sleeping
+//        until an exact time (rather than for a number of seconds) means
+//        we wake up right on the second, even if the clock was adjusted
+//        while we slept.
 //
 //------------------------------------------------
-bool Date::FindAndReplace(string &sourceString, const string &findString,
-      const string &replaceString) const
+unsigned long Date::BlockUntil(const Date& until)
 {
-   string::size_type findStringLoc;
-   bool foundAtLeastOne;
+#if !defined(_WIN32) && !defined(__APPLE__)
+   struct timespec target;
+   target.tv_sec = until.Time();
+   target.tv_nsec = 0;
 
-   if (findString == "" || findString == replaceString)
+   int rc = clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &target, NULL);
+   if (rc == EINTR)
    {
-      return false;
+      // A signal woke us up early; report how long is left
+      time_t now = Now();
+      return (until.Time() > now) ? (unsigned long)(until.Time() - now) : 0;
+   }
+   return 0;
+#else
+   // macOS and Windows can't sleep until an exact time, so sleep for
+   // whatever is left instead.  Sleep at most a second at a time so that
+   // Ctrl-C is noticed quickly; the caller loops until we return 0.
+   struct timespec now;
+   NowPrecise(now);
+   if (now.tv_sec >= until.Time())
+   {
+      return 0;
    }
 
-   foundAtLeastOne = false;
-   findStringLoc = 0;
+   double left = (double)(until.Time() - now.tv_sec) - now.tv_nsec / 1e9;
+   double chunk = (left > 1.0) ? 1.0 : left;
+#ifdef _WIN32
+   Sleep((DWORD)(chunk * 1000.0) + 1);
+#else
+   struct timespec rel;
+   rel.tv_sec = (time_t)chunk;
+   rel.tv_nsec = (long)((chunk - (double)rel.tv_sec) * 1e9);
+   nanosleep(&rel, NULL);
+#endif
 
-   while ((findStringLoc = sourceString.find(findString, findStringLoc)) != string::npos)
-   {
-      sourceString.replace(findStringLoc, findString.length(), replaceString);
-      findStringLoc += replaceString.length();
-
-      foundAtLeastOne = true;
-   }
-
-   return(foundAtLeastOne);
-}
-
-//--------------------------------------------------
-//
-//  Function: FindAndReplace
-//
-//------------------------------------------------
-bool Date::FindAndReplace(string &sourceString, const string &findString,
-      const int &replaceNum, int width , char fill) const
-{
-   string replaceString;
-   string::size_type findStringLoc;
-   string s;
-
-   stringstream out;
-   out << setw(width) << setfill(fill) << replaceNum;
-   replaceString = out.str();
-
-   bool foundAtLeastOne;
-
-   if (findString == "" || findString == replaceString)
-   {
-      return false;
-   }
-
-   foundAtLeastOne = false;
-   findStringLoc = 0;
-
-   while ((findStringLoc = sourceString.find(findString, findStringLoc)) != string::npos)
-   {
-      sourceString.replace(findStringLoc, findString.length(), replaceString);
-      findStringLoc += replaceString.length();
-
-      foundAtLeastOne = true;
-   }
-
-   return(foundAtLeastOne);
+   time_t after = Now();
+   return (until.Time() > after) ? (unsigned long)(until.Time() - after) : 0;
+#endif
 }

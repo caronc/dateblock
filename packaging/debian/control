@@ -1,0 +1,52 @@
+Source: dateblock
+Section: utils
+Priority: optional
+Maintainer: Chris Caron <lead2gold@gmail.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-sequence-python3,
+ libboost-program-options-dev,
+ python3-all-dev,
+ python3-setuptools,
+ pybuild-plugin-pyproject,
+Standards-Version: 4.7.2
+Homepage: https://github.com/caronc/dateblock
+Vcs-Browser: https://github.com/caronc/dateblock
+Vcs-Git: https://github.com/caronc/dateblock.git
+Rules-Requires-Root: no
+
+Package: dateblock
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: block (sleep) until a cron-style moment in time
+ Dateblock works like sleep, except that instead of waiting for a number of
+ seconds it waits until a crontab-style schedule is matched.  It also
+ supports matching on seconds and adding an extra drift time.
+
+Package: libdateblock1
+Section: libs
+Architecture: any
+Multi-Arch: same
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: cron-style date calculations - shared library
+ The libdateblock shared library; it works out the next moment in time
+ matching a cron-style schedule (with optional seconds and drift).
+ .
+ It is used by the dateblock tool and its Python bindings.
+
+Package: libdateblock-dev
+Section: libdevel
+Architecture: any
+Multi-Arch: same
+Depends: libdateblock1 (= ${binary:Version}), ${misc:Depends}
+Description: cron-style date calculations - development files
+ Header files, pkg-config file and the linkable library needed to build
+ programs that use libdateblock.
+
+Package: python3-dateblock
+Section: python
+Architecture: any
+Depends: ${python3:Depends}, ${shlibs:Depends}, ${misc:Depends}
+Description: cron-style blocking (sleep until a moment in time) - Python 3
+ Python bindings for dateblock; block until (or just work out) the next
+ moment in time matching a cron-style schedule.

@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv='content-type' content='text/html;charset=utf-8'>
+  <meta name='generator' content='Ronn-NG/v0.10.1 (http://github.com/apjanke/ronn-ng/tree/0.10.1)'>
+  <title>dateblock(1) - block (sleep) until a cron-style moment in time</title>
+  <style type='text/css' media='all'>
+  /* style: man */
+  body#manpage {margin:0}
+  .mp {max-width:100ex;padding:0 9ex 1ex 4ex}
+  .mp p,.mp pre,.mp ul,.mp ol,.mp dl {margin:0 0 20px 0}
+  .mp h2 {margin:10px 0 0 0}
+  .mp > p,.mp > pre,.mp > ul,.mp > ol,.mp > dl {margin-left:8ex}
+  .mp h3 {margin:0 0 0 4ex}
+  .mp dt {margin:0;clear:left}
+  .mp dt.flush {float:left;width:8ex}
+  .mp dd {margin:0 0 0 9ex}
+  .mp h1,.mp h2,.mp h3,.mp h4 {clear:left}
+  .mp pre {margin-bottom:20px}
+  .mp pre+h2,.mp pre+h3 {margin-top:22px}
+  .mp h2+pre,.mp h3+pre {margin-top:5px}
+  .mp img {display:block;margin:auto}
+  .mp h1.man-title {display:none}
+  .mp,.mp code,.mp pre,.mp tt,.mp kbd,.mp samp,.mp h3,.mp h4 {font-family:monospace;font-size:14px;line-height:1.42857142857143}
+  .mp h2 {font-size:16px;line-height:1.25}
+  .mp h1 {font-size:20px;line-height:2}
+  .mp {text-align:justify;background:#fff}
+  .mp,.mp code,.mp pre,.mp pre code,.mp tt,.mp kbd,.mp samp {color:#131211}
+  .mp h1,.mp h2,.mp h3,.mp h4 {color:#030201}
+  .mp u {text-decoration:underline}
+  .mp code,.mp strong,.mp b {font-weight:bold;color:#131211}
+  .mp em,.mp var {font-style:italic;color:#232221;text-decoration:none}
+  .mp a,.mp a:link,.mp a:hover,.mp a code,.mp a pre,.mp a tt,.mp a kbd,.mp a samp {color:#0000ff}
+  .mp b.man-ref {font-weight:normal;color:#434241}
+  .mp pre {padding:0 4ex}
+  .mp pre code {font-weight:normal;color:#434241}
+  .mp h2+pre,h3+pre {padding-left:0}
+  ol.man-decor,ol.man-decor li {margin:3px 0 10px 0;padding:0;float:left;width:33%;list-style-type:none;text-transform:uppercase;color:#999;letter-spacing:1px}
+  ol.man-decor {width:100%}
+  ol.man-decor li.tl {text-align:left}
+  ol.man-decor li.tc {text-align:center;letter-spacing:4px}
+  ol.man-decor li.tr {text-align:right;float:right}
+  </style>
+</head>
+<!--
+  The following styles are deprecated and will be removed at some point:
+  div#man, div#man ol.man, div#man ol.head, div#man ol.man.
+
+  The .man-page, .man-decor, .man-head, .man-foot, .man-title, and
+  .man-navigation should be used instead.
+-->
+<body id='manpage'>
+  <div class='mp' id='man'>
+
+  <div class='man-navigation' style='display:none'>
+    <a href="#NAME">NAME</a>
+    <a href="#SYNOPSIS">SYNOPSIS</a>
+    <a href="#DESCRIPTION">DESCRIPTION</a>
+    <a href="#OPTIONS">OPTIONS</a>
+    <a href="#FIELD-SYNTAX">FIELD SYNTAX</a>
+    <a href="#CRON-STRING">CRON STRING</a>
+    <a href="#DRIFTING">DRIFTING</a>
+    <a href="#EXAMPLES">EXAMPLES</a>
+    <a href="#EXIT-STATUS">EXIT STATUS</a>
+    <a href="#SEE-ALSO">SEE ALSO</a>
+    <a href="#AUTHOR">AUTHOR</a>
+    <a href="#COPYRIGHT">COPYRIGHT</a>
+  </div>
+
+  <ol class='man-decor man-head man head'>
+    <li class='tl'>dateblock(1)</li>
+    <li class='tc'>Dateblock Manual</li>
+    <li class='tr'>dateblock(1)</li>
+  </ol>
+
+  
+
+<h2 id="NAME">NAME</h2>
+<p class="man-name">
+  <code>dateblock</code> - <span class="man-whatis">block (sleep) until a cron-style moment in time</span>
+</p>
+<h2 id="SYNOPSIS">SYNOPSIS</h2>
+
+<p><code>dateblock</code> [<code>-t</code>] [<code>-v</code>] <code>-c</code> <var>CRON</var> [<code>-i</code>]<br>
+<code>dateblock</code> [<code>-t</code>] [<code>-v</code>] [<code>-s</code> <var>SEC</var>] [<code>-n</code> <var>MIN</var>] [<code>-o</code> <var>HOUR</var>] [<code>-d</code> <var>DOM</var>] [<code>-m</code> <var>MONTH</var>] [<code>-w</code> <var>DOW</var>] [<code>-x</code> <var>DRIFT</var>]<br>
+<code>dateblock</code> <code>-h</code></p>
+
+<h2 id="DESCRIPTION">DESCRIPTION</h2>
+
+<p><strong>dateblock</strong> works like <span class="man-ref">sleep<span class="s">(1)</span></span>, except that instead of waiting <em>for</em> a
+set period of time, it waits <em>until</em> a specific point in time is reached.
+That point in time is described the same way a <span class="man-ref">crontab<span class="s">(5)</span></span> entry is, so
+<strong>dateblock</strong> can be thought of as running a single cron entry in the
+foreground: it returns the moment the schedule is next matched.</p>
+
+<p>On top of the regular cron fields, <strong>dateblock</strong> can also:</p>
+
+<ul>
+  <li>match on a specific <em>second</em> (not just a minute).</li>
+  <li>
+<em>drift</em>; wait an extra number of seconds after the time is matched.</li>
+</ul>
+
+<p>Use <code>--test</code> to see when <strong>dateblock</strong> would unblock without waiting.</p>
+
+<h2 id="OPTIONS">OPTIONS</h2>
+
+<p><code>-h</code>, <code>--help</code>:
+  Show the help screen (with examples) and exit.</p>
+
+<p><code>-t</code>, <code>--test</code>:
+  Do not block; print the current time and the time <strong>dateblock</strong> would
+  unblock at, then exit.</p>
+
+<p><code>-v</code>, <code>--verbose</code>:
+  Print the current time and the time <strong>dateblock</strong> will unblock at before
+  blocking, and the time it actually unblocked at afterwards.</p>
+
+<p><code>-c</code>, <code>--cron=</code><var>CRON</var>:
+  The full schedule as a single cron string; see <a href="#CRON-STRING" title="CRON STRING" data-bare-link="true">CRON STRING</a>. When this
+  is used the individual field options below are ignored.</p>
+
+<p><code>-i</code>, <code>--isc</code>:
+  Read the <code>--cron</code> string as a regular 5 field <span class="man-ref">crontab<span class="s">(5)</span></span> entry (minute,
+  hour, day of month, month, day of week) with no second or drift fields.
+  ISC stands for the Internet Systems Consortium cron.</p>
+
+<p><code>-s</code>, <code>--second=</code><var>SEC</var>:
+  The second(s) to unblock on (0-59).</p>
+
+<p><code>-n</code>, <code>--minute=</code><var>MIN</var>:
+  The minute(s) to unblock on (0-59).</p>
+
+<p><code>-o</code>, <code>--hour=</code><var>HOUR</var>:
+  The hour(s) to unblock on (0-23).</p>
+
+<p><code>-d</code>, <code>--dom=</code><var>DOM</var>:
+  The day(s) of the month to unblock on (1-31).</p>
+
+<p><code>-m</code>, <code>--month=</code><var>MONTH</var>:
+  The month(s) to unblock on (1-12; Jan=1, ..., Dec=12).</p>
+
+<p><code>-w</code>, <code>--dow=</code><var>DOW</var>:
+  The day(s) of the week to unblock on (0-6; Sun=0, ..., Sat=6).</p>
+
+<p><code>-x</code>, <code>--drift=</code><var>DRIFT</var>:
+  Extra seconds to wait once the time is matched; see <a href="#DRIFTING" title="DRIFTING" data-bare-link="true">DRIFTING</a>. Use the
+  7th field (or <code>+</code><var>DRIFT</var>) instead when using <code>--cron</code>.</p>
+
+<p>At least one field (or <code>--cron</code>) must be given. Fields that are not given
+match any value, except for the ones <em>smaller</em> than the smallest field given:
+those are reset to their lowest value. So <code>-n 5</code> unblocks at exactly 5
+minutes past the hour (second 0), and <code>-o 3</code> at exactly 3:00:00.</p>
+
+<h2 id="FIELD-SYNTAX">FIELD SYNTAX</h2>
+
+<p>Every field (and every entry in a cron string) accepts:</p>
+
+<dl>
+<dt><code>x</code></dt>
+<dd>a single value.</dd>
+<dt>
+<code>*/x</code> (or <code>/x</code>)</dt>
+<dd>every value divisible by <em>x</em> (modulus).</dd>
+<dt>
+<code>x-y</code> (or <code>y-x</code>)</dt>
+<dd>every value from <em>x</em> to <em>y</em> (range).</dd>
+<dt><code>x,y</code></dt>
+<dd>both <em>x</em> and <em>y</em> (separator).</dd>
+<dt><code>*</code></dt>
+<dd>any value.</dd>
+</dl>
+
+<p>These can be mixed when separated by commas, so <code>*/a,b,c-d,/e</code> is valid.
+However <code>x-y-z</code>, <code>/x/y</code> and <code>/x-y</code> are not. Every value must be within the
+range of its field; <code>400-4000</code> never works for any field.</p>
+
+<h2 id="CRON-STRING">CRON STRING</h2>
+
+<p>The <code>--cron</code> string has up to 7 fields separated by white space:</p>
+
+<pre><code>drift time ---------------------------------------------+
+day of week (0 - 6) (Sunday=0) ----------------------+  |
+month (1 - 12) -----------------------------------+  |  |
+day of month (1 - 31) -------------------------+  |  |  |
+hour (0 - 23) ------------------------------+  |  |  |  |
+min (0 - 59) ----------------------------+  |  |  |  |  |
+sec (0 - 59) -------------------------+  |  |  |  |  |  |
+                                      |  |  |  |  |  |  |
+                                      *  *  *  *  *  *  *
+</code></pre>
+
+<p>Missing fields at the end are filled in with <code>*</code>, so <code>* 5</code> is the same as
+<code>* 5 * * * * *</code>.</p>
+
+<p>An entry starting with a plus (<code>+</code>) jumps straight to the drift field, so
+<code>* /5 +60</code> is the same as <code>* /5 * * * * 60</code>. Nothing may follow the <code>+</code>
+entry.</p>
+
+<p>With <code>--isc</code> the string is a regular <span class="man-ref">crontab<span class="s">(5)</span></span> entry instead:</p>
+
+<pre><code>day of week (0 - 6) (Sunday=0) ----------+
+month (1 - 12) ----------------------+   |
+day of month (1 - 31) -----------+   |   |
+hour (0 - 23) ---------------+   |   |   |
+min (0 - 59) ------------+   |   |   |   |
+                         |   |   |   |   |
+                         *   *   *   *   *
+</code></pre>
+
+<h2 id="DRIFTING">DRIFTING</h2>
+
+<p>A drift adds a number of seconds onto the time that was matched. For
+example, to wake up on the 1st minute of every 10 minute interval (1, 11,
+21, ..., 51) use a minute of <code>*/10</code> with a drift of 60 seconds.</p>
+
+<ul>
+  <li>A drift is always measured in seconds and is applied <em>after</em> the
+schedule is matched.</li>
+  <li>A drift can not be given on its own; it needs a schedule to go with it.</li>
+  <li>A drift can not be longer than the interval of the schedule itself.
+Only the remainder is kept, so that no matching time is ever skipped.
+With a schedule of every 10 seconds (<code>*/10</code>), a drift of 11 really
+drifts 1 second, and a drift of 10 does nothing at all.</li>
+  <li>Inline drifts (in the cron string) accept the separator and range
+syntax, so <code>0 /5 +15,45</code> unblocks 15 and 45 seconds after every 5th
+minute. The modulus (<code>/x</code>) syntax does not apply to drifts.</li>
+</ul>
+
+<h2 id="EXAMPLES">EXAMPLES</h2>
+
+<p>Block until the next minute divisible by 10 (0, 10, 20, 30, 40 and 50):</p>
+
+<pre><code>$ dateblock -n /10
+</code></pre>
+
+<p>Block until the next second divisible by 5, but only during hours 3 and 4:</p>
+
+<pre><code>$ dateblock -c "/5 * 3,4 * * *"
+$ dateblock -s /5 -o 3,4
+</code></pre>
+
+<p>Block until 5 minutes past the hour (all three are the same):</p>
+
+<pre><code>$ dateblock -c "* 5"
+$ dateblock -c "* 5 * * * *"
+$ dateblock -n 5
+</code></pre>
+
+<p>Block until an hour divisible by 5 (0, 5, 10, 15 and 20) on the 1st to the
+14th, or the 20th, of the month:</p>
+
+<pre><code>$ dateblock -o /5 -d 1-14,20
+</code></pre>
+
+<p>Block until 20 seconds after 5 minutes past the hour:</p>
+
+<pre><code>$ dateblock -c "* 5 * * * * 20"
+$ dateblock -c "* 5 +20"
+</code></pre>
+
+<p>Block until 9:00 on weekdays, written as a regular crontab entry:</p>
+
+<pre><code>$ dateblock -i -c "0 9 * * 1-5"
+</code></pre>
+
+<p>See when a schedule would next run, without waiting:</p>
+
+<pre><code>$ dateblock -t -c "0 30 2 * * 0"
+Current Time : 2026-10-24 13:05:00 (Sat)
+Block Until  : 2026-10-25 02:30:00 (Sun)
+</code></pre>
+
+<p>Run a command every 15 minutes, on the quarter hour:</p>
+
+<pre><code>$ while dateblock -n /15; do ./backup.sh; done
+</code></pre>
+
+<h2 id="EXIT-STATUS">EXIT STATUS</h2>
+
+<dl>
+<dt><code>0</code></dt>
+<dd>The matching time was reached (or, with <code>--test</code>, was worked out).</dd>
+<dt><code>1</code></dt>
+<dd>No options were given, the schedule is not valid, or no matching time
+exists (such as the 31st of February).</dd>
+<dt><code>255</code></dt>
+<dd>The command line could not be parsed.</dd>
+</dl>
+
+<p>If <strong>dateblock</strong> is killed before the time is reached (ie: with Ctrl-C), it
+exits with the usual status for that signal.</p>
+
+<h2 id="SEE-ALSO">SEE ALSO</h2>
+
+<p><span class="man-ref">sleep<span class="s">(1)</span></span>, <span class="man-ref">crontab<span class="s">(5)</span></span>, <span class="man-ref">date<span class="s">(1)</span></span></p>
+
+<h2 id="AUTHOR">AUTHOR</h2>
+
+<p>Chris Caron &lt;lead2gold@gmail.com&gt;</p>
+
+<h2 id="COPYRIGHT">COPYRIGHT</h2>
+
+<p>Copyright (C) 2013-2026 Chris Caron. License GPLv2+: GNU GPL version 2 or
+later (https://gnu.org/licenses/gpl.html).</p>
+
+<p>This is free software: you are free to change and redistribute it. There is
+NO WARRANTY, to the extent permitted by law.</p>
+
+  <ol class='man-decor man-foot man foot'>
+    <li class='tl'>Dateblock</li>
+    <li class='tc'>October 2026</li>
+    <li class='tr'>dateblock(1)</li>
+  </ol>
+
+  </div>
+</body>
+</html>

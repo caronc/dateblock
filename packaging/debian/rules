@@ -1,0 +1,35 @@
+#!/usr/bin/make -f
+# The C++ library and tool build with autotools; the Python bindings are
+# then built with pybuild, linked against that library (DATEBLOCK_SHARED).
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export PYBUILD_NAME = dateblock
+export DATEBLOCK_SHARED = 1
+export TZ = UTC
+
+PYBUILD = --buildsystem=pybuild
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	dh_auto_configure -- --disable-static
+	dh_auto_configure $(PYBUILD)
+
+override_dh_auto_build:
+	dh_auto_build
+	dh_auto_build $(PYBUILD)
+
+override_dh_auto_test:
+	dh_auto_test
+	LD_LIBRARY_PATH=$(CURDIR)/src/.libs \
+	PYBUILD_TEST_ARGS="{interpreter} -m unittest discover -v -s $(CURDIR)/python/tests" \
+	PYBUILD_TEST_CUSTOM=1 dh_auto_test $(PYBUILD)
+
+override_dh_auto_install:
+	dh_auto_install
+	dh_auto_install $(PYBUILD)
+	find debian/tmp -name '*.la' -delete
+
+override_dh_auto_clean:
+	dh_auto_clean
+	dh_auto_clean $(PYBUILD)

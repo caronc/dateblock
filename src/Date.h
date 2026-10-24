@@ -1,8 +1,8 @@
 /*
- Datetools provide a method of manipulating and working dates and times.
+ Dateblock blocks (sleeps) until a cron-style moment in time.
  Copyright (C) 2013-2018 Chris Caron <lead2gold@gmail.com>
 
- This file is part of Datetools.  Datetools is free software; you can
+ This file is part of Dateblock.  Dateblock is free software; you can
  redistribute it and/or modify it under the terms of the GNU General Public
  License as published by the Free Software Foundation; either version 2 of
  the License, or (at your option) any later version.
@@ -16,21 +16,13 @@
  this program; if not, write to the Free Software Foundation, Inc.,
  51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 */
-#ifndef _DATE_H
-#define _DATE_H
-
-#ifdef HAVE_CONFIG_H
-#include "config.h"
-#endif
+#ifndef DATEBLOCK_DATE_H
+#define DATEBLOCK_DATE_H
 
 #include <time.h>
 #include <string>
-#include <sstream>
 #include <set>
 #include <vector>
-#include <iostream> // temporary
-
-using namespace std;
 
 class Date
 {
@@ -112,8 +104,8 @@ class Date
      const time_t Time()const;
      const struct tm& Tm()const;
 
-     // returns a string based on passed in format
-     const string Str(const string& format="%Y-%m-%d %H:%M:%S") const;
+     // returns a string based on passed in format (uses strftime codes)
+     const std::string Str(const std::string& format="%Y-%m-%d %H:%M:%S") const;
 
      const int Sec() const; // returns 0-59
      const int Min() const; // returns 0-59
@@ -144,15 +136,15 @@ class Date
      // to '*' as their default value;  They are not defined
      // as defaults below to remove any ambiguity with the other
      // CronValid() function
-     static bool CronValid(const string& sSecOffset,
-                           const string& sMinOffset,
-                           const string& sHourOffset,
-                           const string& sDomOffset   = "*",
-                           const string& sMonthOffset = "*",
-                           const string& sDowOffset   = "*",
-                           const string& sDriftOffset = "*");
+     static bool CronValid(const std::string& sSecOffset,
+                           const std::string& sMinOffset,
+                           const std::string& sHourOffset,
+                           const std::string& sDomOffset   = "*",
+                           const std::string& sMonthOffset = "*",
+                           const std::string& sDowOffset   = "*",
+                           const std::string& sDriftOffset = "*");
 
-     static bool CronValid(const string& sCronStr="*  *  *  *  *  *  *",
+     static bool CronValid(const std::string& sCronStr="*  *  *  *  *  *  *",
                             bool isISC=false);
 
      // Cron
@@ -170,6 +162,9 @@ class Date
      //  that matches specified cron entry
      //  By default lSecoffset is always set to 0 if 'nothing'
      //    else was specified.
+     //  Throws std::runtime_error if no matching moment can be found
+     //  (for example the 31st of February).  All of the Cron() functions
+     //  below behave the same way.
      const Date Cron(int lSecOffset   = T_NO_ENTRY,
                      int lMinOffset   = T_NO_ENTRY,
                      int lHourOffset  = T_NO_ENTRY,
@@ -182,13 +177,13 @@ class Date
      // to '*' as their default value;  They are not defined
      // as defaults below to remove any ambiguity with the other
      // Cron() function
-     const Date Cron(const string& sSecOffset,
-                     const string& sMinOffset,
-                     const string& sHourOffset,
-                     const string& sDomOffset   = "*",
-                     const string& sMonthOffset = "*",
-                     const string& sDowOffset   = "*",
-                     const string& sDriftOffset = "*") const;
+     const Date Cron(const std::string& sSecOffset,
+                     const std::string& sMinOffset,
+                     const std::string& sHourOffset,
+                     const std::string& sDomOffset   = "*",
+                     const std::string& sMonthOffset = "*",
+                     const std::string& sDowOffset   = "*",
+                     const std::string& sDriftOffset = "*") const;
 
      // Support the ISC Cron Formatting (same as above, but without
      // the seconds) (UNIX/Linux Crontab equivalent)
@@ -213,8 +208,16 @@ class Date
      //                                      |  |  |  |  |  |  |
      //                                      -  -  -  -  -  -  -
      //                              String: *  *  *  *  *  *  *
-     const Date Cron(const string& sCronStr="*  *  *  *  *  *  *",
+     const Date Cron(const std::string& sCronStr="*  *  *  *  *  *  *",
                      bool isISC = false) const;
+
+     // Sleeps until the wall clock reaches 'until'.
+     //  - Returns 0 once that moment arrives (or right away if it has
+     //    already passed).
+     //  - Otherwise returns the number of seconds still left; call it again
+     //    to keep waiting.  This happens when a signal wakes us up early,
+     //    and (on macOS and Windows) after every second of sleep.
+     static unsigned long BlockUntil(const Date& until);
 
    private:
      struct tm m_tmObj;
@@ -234,17 +237,10 @@ class Date
       };
 
      // Internal Tool
-     bool FindAndReplace(string &sourceString, const string &findString,
-                const string &replaceString) const;
-     bool FindAndReplace(string &sourceString, const string &findString,
-                const int &replaceNum,
-                int width = 1 ,
-                char fill = '0') const;
+     size_t Tokenize(const std::string& strIn, char delimiter,
+                     std::vector<std::string> &tokensOut) const;
 
-     size_t Tokenize(const string& strIn, char delimiter,
-                     vector<string> &tokensOut) const;
-
-     bool ParseCronString(const string& strIn, set<int> &comboListOut,
+     bool ParseCronString(const std::string& strIn, std::set<int> &comboListOut,
                             int minVal, int maxVal) const;
 };
 

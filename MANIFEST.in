@@ -1,9 +1,5 @@
-include LICENSE
-include README.md
-include COPYING
-include ChangeLog
-include AUTHORS
-include src/dateblock.h
+# Files the Python source package (sdist) needs on top of what setup.py
+# already pulls in
+include README.md ChangeLog COPYING LICENSE AUTHORS configure.ac
 include src/Date.h
-global-exclude *.pyc
-global-exclude __pycache__
+recursive-include python/tests *.py

@@ -1,0 +1,3 @@
+usr/include/dateblock
+usr/lib/*/libdateblock.so
+usr/lib/*/pkgconfig/dateblock.pc

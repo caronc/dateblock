@@ -18,6 +18,7 @@
 #endif
 
 #include <iostream>
+#include <stdexcept>
 #include <time.h>
 #include "Date.h"
 using namespace std;
@@ -73,6 +74,66 @@ plan test_plan[] =
    { {2014, 2, 11 , 1, 0, 0 }, {2014, 2, 14 , 0, 0, 0}, {"*", "*", "/2", "*", "*", "*", "45"}, 60}
 };
 
+/*
+ * Smaller one-off checks; returns 0 if they all pass
+ */
+static int Fail(const char *what)
+{
+   cerr << "FATAL: " << what << endl;
+   return 1;
+}
+
+static int CheckExtras()
+{
+   // Setting a date while 'today' is the 31st must not spill into the
+   // next month
+   Date dObj(2001, 1, 31, 12, 0, 0);
+   dObj.Set(2000, 4, 3, 1, 2, 3);
+   if (dObj.Str() != "2000-04-03 01:02:03")
+      return Fail("Set() rolled over into the wrong month");
+
+   // Month lengths (including leap years)
+   if (Date(2000, 2, 1).MaxDOMsThisMonth() != 29)
+      return Fail("Feb 2000 should have 29 days");
+   if (Date(1900, 2, 1).MaxDOMsThisMonth() != 28)
+      return Fail("Feb 1900 should have 28 days");
+   if (Date(2001, 12, 1).MaxDOMsNextMonth() != 31)
+      return Fail("Jan 2002 should have 31 days");
+   if (Date(2001, 1, 1).MaxDOMsPrevMonth() != 31)
+      return Fail("Dec 2000 should have 31 days");
+
+   // Formatting goes through strftime()
+   Date dFmt(2026, 10, 24, 14, 5, 9);
+   if (dFmt.Str("%I %p %j %h %x %X") != "02 PM 297 Oct 10/24/26 14:05:09")
+      return Fail("Str() formatting is wrong");
+
+   // A cron that can never match reports an error instead of exiting
+   bool thrown = false;
+   try
+   {
+      dFmt.Cron("0 0 0 31 2 *");
+   }
+   catch (const runtime_error&)
+   {
+      thrown = true;
+   }
+   if (!thrown)
+      return Fail("Feb 31st should not be found");
+
+   // ...but an impossible combination is skipped when another one works
+   if (dFmt.Cron("0 0 0 30,31 2,3 *").Str() != "2027-03-30 00:00:00")
+      return Fail("Mar 30th should have been found");
+
+   // Inline drift; nothing may follow it
+   if (!Date::CronValid("* 5 +20") || Date::CronValid("* 5 +20 1"))
+      return Fail("Inline drift validation is wrong");
+   if (Date(2026, 10, 24, 14, 5, 9).Cron("* 5 +20").Str() !=
+         "2026-10-24 14:05:20")
+      return Fail("Inline drift calculation is wrong");
+
+   return 0;
+}
+
 int main(int argc, char **argv)
 {
    /* Create Reference Time */
@@ -81,20 +142,19 @@ int main(int argc, char **argv)
    for (unsigned i=0; i < sizeof(test_plan)/sizeof(test_plan[0]); i++)
    {
       // Start Time
-      dObjStart.SetYear(test_plan[i].start_time[0]);
-      dObjStart.SetMonth(test_plan[i].start_time[1]);
-      dObjStart.SetDOM(test_plan[i].start_time[2]);
-      dObjStart.SetHour(test_plan[i].start_time[3]);
-      dObjStart.SetMin(test_plan[i].start_time[4]);
-      dObjStart.SetSec(test_plan[i].start_time[5]);
+      dObjStart.Set(test_plan[i].start_time[0],
+                    test_plan[i].start_time[1],
+                    test_plan[i].start_time[2],
+                    test_plan[i].start_time[3],
+                    test_plan[i].start_time[4],
+                    test_plan[i].start_time[5]);
       // Finish Time
-      dObjFinish.SetYear(test_plan[i].finish_time[0]);
-      dObjFinish.SetMonth(test_plan[i].finish_time[1]);
-      dObjFinish.SetDOM(test_plan[i].finish_time[2]);
-      dObjFinish.SetHour(test_plan[i].finish_time[3]);
-      dObjFinish.SetMin(test_plan[i].finish_time[4]);
-      dObjFinish.SetSec(test_plan[i].finish_time[5]);
-
+      dObjFinish.Set(test_plan[i].finish_time[0],
+                     test_plan[i].finish_time[1],
+                     test_plan[i].finish_time[2],
+                     test_plan[i].finish_time[3],
+                     test_plan[i].finish_time[4],
+                     test_plan[i].finish_time[5]);
 
       while ( dObjStart < dObjFinish)
       {
@@ -152,5 +212,5 @@ int main(int argc, char **argv)
       }
    }
 
-   return 0;
+   return CheckExtras();
 }

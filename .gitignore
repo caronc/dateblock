@@ -15,3 +15,42 @@
 # twine / pypi stuff
 *.egg-info/
 dist/
+
+# autotools
+Makefile
+Makefile.in
+aclocal.m4
+autom4te.cache/
+compile
+config.guess
+config.log
+config.status
+config.sub
+configure
+configure~
+depcomp
+install-sh
+libtool
+ltmain.sh
+missing
+test-driver
+.deps/
+.libs/
+src/config.h
+src/config.h.in
+src/config.h.in~
+src/stamp-h1
+dateblock.pc
+*.log
+*.trs
+
+# build outputs
+src/dateblock
+tests/unittest
+dateblock-*.tar.gz
+
+# python
+build/
+__pycache__/
+*.pyc
+wheelhouse/

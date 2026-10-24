@@ -1,8 +1,8 @@
 /*
- Datetools provide a method of manipulating and working dates and times.
+ Dateblock blocks (sleeps) until a cron-style moment in time.
  Copyright (C) 2013-2018 Chris Caron <lead2gold@gmail.com>
 
- This file is part of Datetools.  Datetools is free software; you can
+ This file is part of Dateblock.  Dateblock is free software; you can
  redistribute it and/or modify it under the terms of the GNU General Public
  License as published by the Free Software Foundation; either version 2 of
  the License, or (at your option) any later version.
@@ -20,87 +20,17 @@
 #include "config.h"
 #endif
 
-#include <signal.h>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <stdexcept>
+#include <boost/program_options.hpp>
 #include "Date.h"
 #include "dateblock.h"
 
-#ifdef PYTHON_MODULE
-   // Support python module for Crons
-   #include "Python.h"
-   #include "datetime.h"
-
-   // Support for DateTime Lookups
-   #ifdef IS_PY3K
-      #define PySideDateTime_IMPORT PyDateTime_IMPORT
-   #else
-     #define PySideDateTime_IMPORT \
-             PyDateTimeAPI = (PyDateTime_CAPI*) PyCObject_Import((char*)"datetime", \
-                                                                 (char*)"datetime_CAPI")
-   #endif
-#else
-   #include <boost/program_options.hpp>
-   namespace po = boost::program_options;
-#endif
-
+namespace po = boost::program_options;
 using namespace std;
 
-extern "C" void sigAlarmHandler();
-void sigAlarmHandler(int signal)
-{
-   // do nothing
-}
-
-//------------------------------------------------
-//
-//  Function: Block
-//
-//  Desc: Blocks for a specified period (in seconds)
-//
-//------------------------------------------------
-unsigned long Block(unsigned long nsecs)
-{
-   struct sigaction newact, oldact;
-   sigset_t         newmask, oldmask, suspmask;
-   unsigned long     unslept;
-
-   newact.sa_handler = sigAlarmHandler;
-   sigemptyset(&newact.sa_mask);
-   newact.sa_flags = 0;
-   sigaction(SIGALRM, &newact, &oldact);
-
-   /* set our handler, save previous information */
-   sigemptyset(&newmask);
-   sigaddset(&newmask, SIGALRM);
-   /* block SIGALRM and save current signal mask */
-   sigprocmask(SIG_BLOCK, &newmask, &oldmask);
-
-   if(nsecs > 0)
-   {
-      alarm(nsecs);
-      suspmask = oldmask;
-      /* make sure SIGALRM isn't blocked */
-      sigdelset(&suspmask, SIGALRM);
-
-      /* wait for any signal to be caught */
-      sigsuspend(&suspmask);
-   }
-
-   /* some signal has been caught, SIGALRM is now blocked */
-   unslept = alarm(0);
-   /* reset previous action */
-   sigaction(SIGALRM, &oldact, NULL);
-
-   /* reset signal mask, which unblocks SIGALRM */
-   sigprocmask(SIG_SETMASK, &oldmask, NULL);
-
-   return(unslept);
-
-}
-
-#ifndef PYTHON_MODULE
 //------------------------------------------------
 //
 //  Function: ProgramDetails
@@ -109,7 +39,7 @@ unsigned long Block(unsigned long nsecs)
 void ProgramDetails()
 {
    cerr << "Dateblock v" << PACKAGE_VERSION  << " "
-        << "Copyright (C) 2013-2018 " << AUTHOR << endl << endl
+        << "Copyright (C) 2013-2026 " << AUTHOR << endl << endl
         << "Dateblock comes with ABSOLUTELY NO WARRANTY" << endl
         << "This is free software, and you are welcome to redistribute it" << endl
         << "under certain conditions; see man pages for details." << endl << endl
@@ -357,13 +287,22 @@ int main(int argc, char **argv)
          return 1;
       }
 
-      dObjFinish = dObjStart.Cron(sSecOffset,
-                     sMinOffset,
-                     sHourOffset,
-                     sDomOffset,
-                     sMonthOffset,
-                     sDowOffset,
-                     sDriftOffset);
+      try
+      {
+         dObjFinish = dObjStart.Cron(sSecOffset,
+                        sMinOffset,
+                        sHourOffset,
+                        sDomOffset,
+                        sMonthOffset,
+                        sDowOffset,
+                        sDriftOffset);
+      }
+      catch (const runtime_error& e)
+      {
+         cerr << "Error: No matching date/time could be found: "
+              << e.what() << endl;
+         return 1;
+      }
    }
    else
    {
@@ -382,7 +321,16 @@ int main(int argc, char **argv)
          return 1;
       }
 
-      dObjFinish = dObjStart.Cron(sCronStr, useISC);
+      try
+      {
+         dObjFinish = dObjStart.Cron(sCronStr, useISC);
+      }
+      catch (const runtime_error& e)
+      {
+         cerr << "Error: No matching date/time could be found: "
+              << e.what() << endl;
+         return 1;
+      }
    }
 
 
@@ -394,10 +342,8 @@ int main(int argc, char **argv)
 
    if (!(poVariablesMap.count("test")))
    {
-      if(dObjFinish.Time() > dObjStart.Time())
-      {
-         Block(dObjFinish.Time()-dObjStart.Time());
-      }
+      // Keep sleeping if a signal happens to wake us up early
+      while (Date::BlockUntil(dObjFinish) > 0);
       Date dObjNow;
       if (poVariablesMap.count("verbose"))
       {
@@ -407,245 +353,3 @@ int main(int argc, char **argv)
    }
    return 0;
 }
-#else
-/* Block for a specified cron period; return None if a failure occurs otherwise
- * return the date calculated (after blocking until that period of time).
- *
- * You can additionally use this function to just preform calculations if
- * you specify block=False
- */
-static PyObject* dateblock(PyObject *self, PyObject *args, PyObject *kwds)
-{
-   char *str;
-   PyObject *pCronObj = NULL;
-   PyObject *pBlockObj = Py_True;
-   PyObject *pIscObj = Py_False;
-
-   static char* kwlist[] = {"cron", "block", "ref", "isc", NULL};
-
-   // Block Flag; By default we always block (true=block, false=no block)
-   bool block = true;
-
-   // use isc cron type (no seconds or drift in cron entry); by default we use
-   // the dateblock format
-   bool isc = false;
-
-   // Reference Date/Time
-   PyObject *pDateObj = NULL;
-
-   // Time initializes to 'Now'
-   Date dObjStart;
-
-   // Reference Time; the only difference between this and the start time
-   // is that the Start time may be adjusted based on a passed in reference
-   // time.  When we preform a check to decide if we need to block or not, we
-   // need to preform this calculation based on 'now' not the start time.
-   Date dObjRef(dObjStart);
-
-   // Finish time will be adjusted below base on cron value specified
-   Date dObjFinish;
-
-   if(!PyArg_ParseTupleAndKeywords(args, kwds, "O|OOO", kwlist,
-            &pCronObj, &pBlockObj, &pDateObj, &pIscObj))
-   {
-      // Couldn't parse content
-      return NULL;
-   }
-
-   if(!PyString_Check(pCronObj))
-   {
-      // Raise TypeError Exception
-      PyErr_SetString(PyExc_TypeError, "Only strings accepted.");
-      return NULL;
-   }
-
-   if (!PyDateTimeAPI)
-      /* Since we are dealing with python datetime objects, the following step
-       * is VERY IMPORTANT or the code will crash on the below checks since they
-       * will internally reference values that have not been initialized */
-      PyDateTime_IMPORT;
-
-   if(pDateObj != NULL)
-   {
-      if(pDateObj != Py_None)
-      {
-         /* A Reference Date was specified */
-         if(PyDateTime_CheckExact(pDateObj))
-         {
-            /* We got a datetime reference object */
-            dObjStart.Set(
-               PyDateTime_GET_YEAR(pDateObj),
-               PyDateTime_GET_MONTH(pDateObj),
-               PyDateTime_GET_DAY(pDateObj),
-               PyDateTime_DATE_GET_HOUR(pDateObj),
-               PyDateTime_DATE_GET_MINUTE(pDateObj),
-               PyDateTime_DATE_GET_SECOND(pDateObj)
-            );
-         }
-         else if (PyDate_CheckExact(pDateObj))
-         {
-            /* We got a date reference object */
-            dObjStart.Set(
-               PyDateTime_GET_YEAR(pDateObj),
-               PyDateTime_GET_MONTH(pDateObj),
-               PyDateTime_GET_DAY(pDateObj),
-               0, 0, 0);
-         }
-         else if (PyTime_CheckExact(pDateObj))
-         {
-            /* We got a time reference object */
-            dObjStart.Set(
-               dObjStart.Year(),
-               dObjStart.Month(),
-               dObjStart.DOM(),
-               PyDateTime_TIME_GET_HOUR(pDateObj),
-               PyDateTime_TIME_GET_MINUTE(pDateObj),
-               PyDateTime_TIME_GET_SECOND(pDateObj)
-            );
-         }
-         else if (PyLong_CheckExact(pDateObj))
-         {
-            /* We got EPOC Time Value */
-            dObjStart.Set((time_t) PyLong_AsUnsignedLongLongMask(pDateObj));
-         }
-         else if (PyInt_Check(pDateObj))
-         {
-            /* We got an ill formated EPOC time value; this will only
-             * happen until 2038 when the REAL Y2K takes in effect,
-             * at that point, we'll always get a Lon */
-            dObjStart.Set((time_t) PyInt_AsUnsignedLongLongMask(pDateObj));
-         }
-         else
-         {
-            /* Unsupported reference date was specified */
-            PyErr_SetString(PyExc_SyntaxError,
-                  "Reference date format is not supported.");
-            return NULL;
-         }
-         #ifdef DEBUG
-         cerr << "DEBUG Python::Reference('" <<
-            dObjStart.Year() <<
-            "-" << dObjStart.Month() <<
-            "-" << dObjStart.DOM() <<
-            " " << dObjStart.Hour() <<
-            ":" << dObjStart.Min() <<
-            ":" << dObjStart.Sec()
-               << ")" << endl;
-         #endif
-      }
-   }
-
-   /* Acquire String */
-   str = PyString_AsString(pCronObj);
-   if(str == NULL)
-   {
-      PyErr_SetString(PyExc_SyntaxError,
-            "The cron specified is not formatted correctly.");
-      return NULL;
-   }
-
-   /* Determine if we are blocking or not */
-   if(PyBool_Check(pBlockObj))
-   {
-      block = (bool) ((PyBoolObject *) pBlockObj)->ob_ival;
-   }
-   else if (PyInt_Check(pBlockObj))
-   {
-      // We'll be kind to those who ignore the fact that we're
-      // expecting a bool and treat integers as we would booleans
-      // smart developers will never cause this part of the code
-      // to be reached :)
-      block = (PyInt_AS_LONG(pBlockObj) != 0);
-   }
-
-   /* Determine if we are using isc format or not */
-   if(PyBool_Check(pIscObj))
-   {
-      isc = (bool) ((PyBoolObject *) pIscObj)->ob_ival;
-   }
-   else if (PyInt_Check(pIscObj))
-   {
-      // We'll be kind to those who ignore the fact that we're
-      // expecting a bool and treat integers as we would booleans
-      // smart developers will never cause this part of the code
-      // to be reached :)
-      isc = (PyInt_AS_LONG(pIscObj) != 0);
-   }
-
-   #ifdef DEBUG
-   cerr << "DEBUG Python::dateblock('" << str
-      << "', isc=" << (string) (isc?"y":"n")
-      << ",block=" << (string) (block?"y":"n") << endl;
-   #endif
-
-   if(!Date::CronValid(str, isc))
-   {
-      // Raise SyntaxError Exception
-      PyErr_SetString(PyExc_SyntaxError,
-            "The cron specified is not formatted correctly.");
-      return NULL;
-   }
-
-   dObjFinish = dObjStart.Cron(str, isc);
-
-   if(block && dObjFinish.Time() > dObjRef.Time())
-   {
-      if(Block(dObjFinish.Time()-dObjRef.Time()))
-      {
-         // Simply put, if block is interupted by any
-         // means, we need to return this to the python
-         // tool calling it. Block() returns the amount of
-         // time still left to drift for; therfore we reached
-         // here because a non-zero value was returned
-         return Py_None;
-      }
-   }
-
-   // Return Finish Date/Time
-   return PyDateTime_FromDateAndTime(dObjFinish.Year(),
-                                     dObjFinish.Month(),
-                                     dObjFinish.DOM(),
-                                     dObjFinish.Hour(),
-                                     dObjFinish.Min(),
-                                     dObjFinish.Sec(),
-                                     0);
-}
-
-/* Python Method Table.
- */
-static PyMethodDef CronMethods[] =
-{
-    {"dateblock", (PyCFunction)dateblock, METH_VARARGS|METH_KEYWORDS,
-                  "Cron like blocking function"},
-    /* sentinel */
-    {NULL, NULL }
-};
-
-/* Register the method table.
- */
-PyMODINIT_FUNC
-initdateblock()
-{
-   PyObject *m;
-
-   m = Py_InitModule("dateblock", CronMethods);
-
-   /* Create Constants */
-   PyModule_AddIntConstant(m, "SEC_MIN", Date::T_SEC_MIN);
-   PyModule_AddIntConstant(m, "SEC_MAX", Date::T_SEC_MAX);
-   PyModule_AddIntConstant(m, "MIN_MIN", Date::T_MIN_MIN);
-   PyModule_AddIntConstant(m, "MIN_MAX", Date::T_MIN_MAX);
-   PyModule_AddIntConstant(m, "HOUR_MIN", Date::T_HOUR_MIN);
-   PyModule_AddIntConstant(m, "HOUR_MAX", Date::T_HOUR_MAX);
-   PyModule_AddIntConstant(m, "DOM_MIN", Date::T_DOM_MIN);
-   PyModule_AddIntConstant(m, "DOM_MAX", Date::T_DOM_MAX);
-   PyModule_AddIntConstant(m, "MONTH_MIN", Date::T_MONTH_MIN);
-   PyModule_AddIntConstant(m, "MONTH_MAX", Date::T_MONTH_MAX);
-   PyModule_AddIntConstant(m, "YEAR_MIN", Date::T_YEAR_MIN);
-   PyModule_AddIntConstant(m, "YEAR_MAX", Date::T_YEAR_MAX);
-   PyModule_AddIntConstant(m, "DOW_MIN", Date::T_DOW_MIN);
-   PyModule_AddIntConstant(m, "DOW_MAX", Date::T_DOW_MAX);
-   PyModule_AddIntConstant(m, "DRIFT_MIN", Date::T_DRIFT_MIN);
-   PyModule_AddIntConstant(m, "DRIFT_MAX", Date::T_DRIFT_MAX);
-}
-#endif

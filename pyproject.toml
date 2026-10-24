@@ -1,0 +1,14 @@
+# The package metadata lives in setup.py; RHEL 9 ships a setuptools that
+# predates [project] tables, and its RPM build uses that setuptools.
+[build-system]
+requires = ["setuptools>=53"]
+build-backend = "setuptools.build_meta"
+
+# Wheels for PyPI are built with cibuildwheel (make docker-wheels, or the
+# GitHub workflow for Linux, macOS and Windows)
+[tool.cibuildwheel]
+build = "cp39-* cp310-* cp311-* cp312-* cp313-* cp314-*"
+# 32-bit Linux uses a 32-bit time_t, which can't hold dates past 2038
+skip = "*-manylinux_i686 *-musllinux_i686"
+test-sources = ["python/tests"]
+test-command = "python -m unittest discover -v -s python/tests"
