@@ -21,6 +21,7 @@
 #include <datetime.h>
 
 #include <math.h>
+#include <limits>
 #include <stdexcept>
 #include "Date.h"
 
@@ -30,6 +31,7 @@
 //                        local time)
 //  - date:               midnight of that day
 //  - time:               that time, today
+//  - timedelta:          offset from now
 //  - int or float:       seconds since the epoch
 // Returns false (with a TypeError set) for anything else.
 static bool PyToDate(PyObject *obj, Date &out)
@@ -95,6 +97,25 @@ static bool PyToDate(PyObject *obj, Date &out)
       return true;
    }
 
+   if (PyDelta_Check(obj))
+   {
+      // timedelta is relative to now. Date precision is one second, so we
+      // keep only whole seconds (floor), which matches datetime handling.
+      long long deltaSeconds =
+         (long long) PyDateTime_DELTA_GET_DAYS(obj) * 86400LL +
+         (long long) PyDateTime_DELTA_GET_SECONDS(obj);
+      long long target = (long long) out.Time() + deltaSeconds;
+      if (target < (long long) std::numeric_limits<time_t>::min() ||
+          target > (long long) std::numeric_limits<time_t>::max())
+      {
+         PyErr_SetString(PyExc_OverflowError,
+               "timedelta reference overflows the supported time range.");
+         return false;
+      }
+      out.Set((time_t) target);
+      return true;
+   }
+
    if (PyLong_Check(obj) && !PyBool_Check(obj))
    {
       long long epoch = PyLong_AsLongLong(obj);
@@ -113,7 +134,7 @@ static bool PyToDate(PyObject *obj, Date &out)
    }
 
    PyErr_SetString(PyExc_TypeError,
-         "ref must be a datetime, date, time, epoch seconds or None.");
+         "ref must be a datetime, date, time, timedelta, epoch seconds or None.");
    return false;
 }
 
@@ -136,7 +157,8 @@ PyDoc_STRVAR(dateblock_doc,
 "- cron:  a dateblock cron string ('sec min hour dom month dow drift'),\n"
 "         or a regular crontab string when isc=True.\n"
 "- block: set to False to only work out the time (no sleeping).\n"
-"- ref:   calculate relative to this datetime, date, time or epoch value\n"
+"- ref:   calculate relative to this datetime, date, time, timedelta\n"
+"         or epoch value\n"
 "         instead of now.\n"
 "- isc:   treat the cron string as a regular 5 field crontab entry.\n\n"
 "Returns the matching moment as a datetime (in local time).");

@@ -31,6 +31,11 @@ class DateblockTests(unittest.TestCase):
         self.assertEqual(db("*/1", ref=ref, block=False),
                          datetime(2000, 5, 3, 10, 10, 1))
 
+    def test_datetime_plus_timedelta_reference(self):
+        ref = datetime(2000, 5, 3, 10, 10, 0) + timedelta(days=1)
+        self.assertEqual(db("*/1", ref=ref, block=False),
+                         datetime(2000, 5, 4, 10, 10, 1))
+
     def test_date_reference_starts_at_midnight(self):
         self.assertEqual(db("*/1", ref=date(2000, 5, 3), block=False),
                          datetime(2000, 5, 3, 0, 0, 1))
@@ -50,6 +55,18 @@ class DateblockTests(unittest.TestCase):
         ref = datetime(2000, 1, 1, tzinfo=timezone.utc)
         expected = datetime.fromtimestamp(ref.timestamp() + 1)
         self.assertEqual(db("*/1", ref=ref, block=False), expected)
+
+    def test_timedelta_reference_future(self):
+        actual = db("*/1", ref=timedelta(seconds=5), block=False)
+        expected = db("*/1", ref=datetime.now() + timedelta(seconds=5),
+                      block=False)
+        self.assertLessEqual(abs((actual - expected).total_seconds()), 1)
+
+    def test_timedelta_reference_past(self):
+        actual = db("*/1", ref=timedelta(seconds=-5), block=False)
+        expected = db("*/1", ref=datetime.now() + timedelta(seconds=-5),
+                      block=False)
+        self.assertLessEqual(abs((actual - expected).total_seconds()), 1)
 
     def test_no_reference_means_now(self):
         # Repeat so that some calls land right on a second boundary
