@@ -1,7 +1,7 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
-## [1.1.0] - 2026-10-24
+## [2.0.0] - 2026-10-24
 ### Added
 - Range steps: 'x-y/z' is every z'th value from x to y (ie: '1-10/3' is 1,
 4, 7 and 10).
@@ -14,9 +14,9 @@ Linux, all kept in packaging/.
 `make docker-arch` and friends build and test everything in a container.
 - The man page now covers every option and is generated from
 packaging/man/dateblock.md.
-- `pip install dateblock` (or `uv tool install dateblock`) installs the
-Python module plus a `dateblock` command with the same options, on Linux,
-macOS and Windows. Wheels are built for Python 3.9 to 3.14.
+- `pip install dateblock` installs the Python library on Linux, macOS and
+Windows (the `dateblock` command is the C++ tool). Wheels are built for
+Python 3.9 to 3.14.
 - `make docker-pypi` builds the PyPI files; `make release` builds every
 package into dist/release/ with checksums.
 - macOS and Windows support in the library (time and sleep functions).

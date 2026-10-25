@@ -5,7 +5,7 @@
 #  - python-dateblock: the Python bindings
 pkgbase=dateblock
 pkgname=('dateblock' 'python-dateblock')
-pkgver=1.1.0
+pkgver=2.0.0
 pkgrel=1
 pkgdesc='Block (sleep) until a cron-style moment in time'
 arch=('x86_64' 'aarch64')

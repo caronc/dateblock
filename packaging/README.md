@@ -61,15 +61,15 @@ On a machine running the matching distribution:
    ```bash
    rpmbuild -bs --define "_sourcedir $PWD" --define "_srcrpmdir $PWD" \
       packaging/redhat/dateblock.spec
-   mock -r alma+epel-9-x86_64 dateblock-1.1.0-*.src.rpm
+   mock -r alma+epel-9-x86_64 dateblock-2.0.0-*.src.rpm
    ```
 
 * **Debian** (needs `dpkg-dev` and the `Build-Depends` from
   `debian/control`):
    ```bash
    ./autogen.sh && ./configure && make dist
-   mv dateblock-1.1.0.tar.gz ../dateblock_1.1.0.orig.tar.gz
-   cd .. && tar -xzf dateblock_1.1.0.orig.tar.gz && cd dateblock-1.1.0
+   mv dateblock-2.0.0.tar.gz ../dateblock_2.0.0.orig.tar.gz
+   cd .. && tar -xzf dateblock_2.0.0.orig.tar.gz && cd dateblock-2.0.0
    cp -a /path/to/checkout/packaging/debian debian
    dpkg-buildpackage -us -uc
    ```

@@ -15,7 +15,7 @@
 # this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 Name:           dateblock
-Version:        1.1.0
+Version:        2.0.0
 Release:        1%{?dist}.nuxref
 Summary:        Block (sleep) until a cron-style moment in time
 License:        GPL-2.0-or-later
@@ -41,7 +41,7 @@ Requires:       %{name}-libs%{?_isa} = %{version}-%{release}
 
 # This project used to be called datetools; that package only pulled in
 # dateblock (and the now retired datemath)
-Obsoletes:      datetools < 1.1.0
+Obsoletes:      datetools < 2.0.0
 
 %description
 Dateblock works like sleep, except that instead of waiting for a number of
@@ -68,7 +68,7 @@ programs that use libdateblock.
 Summary:        Python bindings for dateblock (cron-style blocking)
 Requires:       %{name}-libs%{?_isa} = %{version}-%{release}
 # The old Python 2 bindings
-Obsoletes:      python-dateblock < 1.1.0
+Obsoletes:      python-dateblock < 2.0.0
 
 %description -n python3-dateblock
 Python bindings for dateblock; block until (or just work out) the next
@@ -119,8 +119,8 @@ export PYTHONPATH=%{buildroot}%{python3_sitearch}
 %{python3_sitearch}/dateblock-%{version}.dist-info/
 
 %changelog
-* Sat Oct 24 2026 Chris Caron <lead2gold@gmail.com> - 1.1.0-1
-- Updated to version 1.1.0
+* Sat Oct 24 2026 Chris Caron <lead2gold@gmail.com> - 2.0.0-1
+- Updated to version 2.0.0
 - Project renamed from datetools to dateblock; datemath has been retired
 - libdateblock is now a shared library (dateblock-libs and dateblock-devel)
 - Python 3 bindings (python3-dateblock)

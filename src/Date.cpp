@@ -59,14 +59,14 @@ namespace {
       return (month == 1 && leap) ? 29 : days[month];
    }
 
-   // Windows' localtime_s() and mktime() only work from 1970 to the year
-   // 3000.  DATEBLOCK_TEST_NARROW_TIME makes other systems act the same way,
-   // so the work-around below can be tested anywhere.
-   #if defined(_WIN32) || defined(DATEBLOCK_TEST_NARROW_TIME)
-   #define DATEBLOCK_NARROW_TIME
-   #endif
-
-   #ifdef DATEBLOCK_NARROW_TIME
+   // Some systems' own date functions give up on dates far from today:
+   // Windows' only work from 1970 to the year 3000, and macOS' mktime()
+   // refuses years before 1900.  LocalTime() and MakeTime() below work
+   // around that whenever one of them fails.  These make other systems act
+   // the same way, so the work-around can be tested anywhere:
+   //  - DATEBLOCK_TEST_NARROW_TIME: like Windows
+   //  - DATEBLOCK_TEST_OLD_MKTIME:  like macOS
+   #ifdef DATEBLOCK_TEST_NARROW_TIME
    // 3000-12-31 23:59:59 UTC, the last moment Windows can convert
    const long long NARROW_LAST = 32535215999LL;
    #endif
@@ -93,6 +93,10 @@ namespace {
    // only fills in tm_wday when it works, which tells the two apart.
    bool SystemMakeTime(struct tm& tmIo, time_t& tOut)
    {
+   #ifdef DATEBLOCK_TEST_OLD_MKTIME
+      if (tmIo.tm_year < 0)
+         return false;
+   #endif
       struct tm tmp = tmIo;
       tmp.tm_wday = -1;
       time_t t = mktime(&tmp);
@@ -113,23 +117,21 @@ namespace {
    {
       struct tm tmp;
       long long cycles = 0;
-   #ifdef DATEBLOCK_NARROW_TIME
-      // Outside of what the system can do, work out the same moment a
-      // whole number of 400 year cycles away (somewhere from 2000 to 2399)
-      // and move the year back afterwards
-      if (tVal < 0 || tVal > NARROW_LAST - 2 * 86400)
+      if (!SystemLocalTime(tVal, tmp))
       {
+         // The system gave up; work out the same moment a whole number of
+         // 400 year cycles away (somewhere from 2000 to 2399) and move the
+         // year back afterwards
          if (tVal < -(1LL << 62) || tVal > (1LL << 62))
             return false;
          long long fromBase = (long long)tVal - 946684800LL;  // 2000-01-01
          cycles = fromBase / CALENDAR_CYCLE;
          if (fromBase % CALENDAR_CYCLE < 0)
             cycles--;
-         tVal = (time_t)(tVal - cycles * CALENDAR_CYCLE);
+         if (cycles == 0 ||
+             !SystemLocalTime((time_t)(tVal - cycles * CALENDAR_CYCLE), tmp))
+            return false;
       }
-   #endif
-      if (!SystemLocalTime(tVal, tmp))
-         return false;
       long long year = (long long)tmp.tm_year + cycles * 400;
       if (year < INT_MIN || year > INT_MAX - 1900)
          return false;
@@ -145,21 +147,19 @@ namespace {
    {
       struct tm tmp = tmIn;
       long long cycles = 0;
-   #ifdef DATEBLOCK_NARROW_TIME
-      // The same idea as LocalTime(): move a year the system can't handle
-      // into 2000 to 2399 first
-      long long year = (long long)tmp.tm_year + 1900 + tmp.tm_mon / 12;
-      if (year < 1971 || year > 2999)
+      time_t t;
+      if (!SystemMakeTime(tmp, t))
       {
+         // The system gave up; the same idea as LocalTime(): move the year
+         // into 2000 to 2399, then back again afterwards
+         long long year = (long long)tmp.tm_year + 1900 + tmp.tm_mon / 12;
          cycles = (year - 2000) / 400;
          if ((year - 2000) % 400 < 0)
             cycles--;
          tmp.tm_year = (int)(tmp.tm_year - cycles * 400);
+         if (cycles == 0 || !SystemMakeTime(tmp, t))
+            return false;
       }
-   #endif
-      time_t t;
-      if (!SystemMakeTime(tmp, t))
-         return false;
       long long year2 = (long long)tmp.tm_year + cycles * 400;
       if (year2 < INT_MIN || year2 > INT_MAX - 1900)
          return false;

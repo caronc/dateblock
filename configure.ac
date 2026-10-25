@@ -15,7 +15,7 @@
 # this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 AC_PREREQ([2.69])
-AC_INIT([dateblock], [1.1.0], [lead2gold@gmail.com], [dateblock],
+AC_INIT([dateblock], [2.0.0], [lead2gold@gmail.com], [dateblock],
         [https://github.com/caronc/dateblock])
 
 AC_CONFIG_SRCDIR([src/Date.cpp])

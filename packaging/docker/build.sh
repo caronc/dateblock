@@ -70,12 +70,15 @@ build)
    python3 setup.py -q build -b /tmp/pybuild --build-lib /tmp/pylib
    TZ=UTC PYTHONPATH=/tmp/pylib python3 -m unittest discover -v -s python/tests
 
-   # ...and once more acting like Windows, whose own date functions only
-   # work from 1970 to the year 3000 (the code works around that)
-   CFLAGS=-DDATEBLOCK_TEST_NARROW_TIME python3 setup.py -q build \
-      -b /tmp/pybuild-narrow --build-lib /tmp/pylib-narrow
-   TZ=UTC PYTHONPATH=/tmp/pylib-narrow \
-      python3 -m unittest discover -s python/tests
+   # ...and acting like systems whose own date functions give up on dates
+   # far from today (the code works around that): Windows (1970 to 3000
+   # only) and macOS (mktime() refuses years before 1900)
+   for flag in DATEBLOCK_TEST_NARROW_TIME DATEBLOCK_TEST_OLD_MKTIME; do
+      CFLAGS=-D$flag python3 setup.py -q build \
+         -b /tmp/pybuild-$flag --build-lib /tmp/pylib-$flag
+      TZ=UTC PYTHONPATH=/tmp/pylib-$flag \
+         python3 -m unittest discover -s python/tests
+   done
 
    make dist
    cp dateblock-$version.tar.gz /out/

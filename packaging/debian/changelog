@@ -1,4 +1,4 @@
-dateblock (1.1.0-1) unstable; urgency=medium
+dateblock (2.0.0-1) unstable; urgency=medium
 
   * New upstream release; the project was renamed from datetools.
   * libdateblock is now a shared library (libdateblock1, libdateblock-dev).

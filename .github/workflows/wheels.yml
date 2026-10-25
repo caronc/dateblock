@@ -2,7 +2,7 @@
 # Windows.
 #  - Every push and pull request: build and test only; nothing is kept
 #    (no artifacts are saved).
-#  - Pushing a version tag (ie: v1.1.0): once every build and test has
+#  - Pushing a version tag (ie: v2.0.0): once every build and test has
 #    passed, the publish jobs build the files again and upload them straight
 #    to PyPI using trusted publishing (no API token is stored; see
 #    packaging/README.md).  This is the only time PyPI is touched, and
