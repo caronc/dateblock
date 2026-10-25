@@ -24,6 +24,9 @@ RUN pacman -Syu --noconfirm --needed base-devel git && \
     pacman -Scc --noconfirm
 
 COPY packaging/arch/PKGBUILD /tmp/PKGBUILD
+# Only install what is missing (pacman -T lists it), so pacman has nothing
+# to skip (and warn about)
 RUN source /tmp/PKGBUILD && \
-    pacman -S --noconfirm --needed "${makedepends[@]}" "${checkdepends[@]}" && \
+    missing=$(pacman -T "${makedepends[@]}" "${checkdepends[@]}" | sort -u) ; \
+    if [ -n "$missing" ]; then pacman -S --noconfirm $missing; fi && \
     pacman -Scc --noconfirm && rm -f /tmp/PKGBUILD

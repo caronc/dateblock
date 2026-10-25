@@ -19,10 +19,16 @@
 # 'make check' runs these against the library and tool built in src/
 AM_CPPFLAGS = -I$(top_srcdir)/src
 
-check_PROGRAMS = unittest
+check_PROGRAMS = unittest unittest-narrow
 unittest_SOURCES = unittest.cpp
 unittest_LDADD = $(top_builddir)/src/libdateblock.la
 
+# The same tests, with the library acting like Windows: its own date
+# functions only work from 1970 to the year 3000 (the code works around
+# that)
+unittest_narrow_SOURCES = unittest.cpp $(top_srcdir)/src/Date.cpp
+unittest_narrow_CPPFLAGS = $(AM_CPPFLAGS) -DDATEBLOCK_TEST_NARROW_TIME
+
 dist_check_SCRIPTS = cli-test.sh
-TESTS = unittest cli-test.sh
+TESTS = unittest unittest-narrow cli-test.sh
 AM_TESTS_ENVIRONMENT = DATEBLOCK='$(top_builddir)/src/dateblock'; export DATEBLOCK;

@@ -474,6 +474,28 @@ static int CheckHardening()
                2025, 1, 15, 3, 10, 0, "2025-01-15 04:05:00"))
       return Fail("Long padded input was not read correctly");
 
+   // Dates before 1970 and after the year 3000 work too (Windows' own date
+   // functions can't do them; the unittest-narrow build checks that)
+   if (Date(1900, 2, 28, 12, 0, 0).Str() != "1900-02-28 12:00:00" ||
+       Date(3500, 6, 1, 0, 0, 0).Str("%F %a") != "3500-06-01 Fri" ||
+       Date(1601, 1, 1, 0, 0, 0).Str("%F %a") != "1601-01-01 Mon" ||
+       !Expect("0 0 0 29 2", false, 1896, 3, 1, 0, 0, 0, "1904-02-29 00:00:00") ||
+       !Expect("0 0 0 29 2", false, 3999, 3, 1, 0, 0, 0, "4000-02-29 00:00:00") ||
+       !Expect("0 0 0 29 2", false, 3000, 12, 31, 23, 0, 0, "3004-02-29 00:00:00") ||
+       !Expect("0 30 9 * * 1", false, 1969, 12, 31, 23, 0, 0, "1970-01-05 09:30:00"))
+      return Fail("A date before 1970 or after 3000 is wrong");
+   // A 68 year drift from 2024 starts its search in 1956: the result is the
+   // match found from there, plus the drift
+   Date dRef(2024, 2, 29, 23, 59, 59);
+   const time_t hugeDrift = 2147483647;
+   if (dRef.Cron("0 0 0 1 1 * 2147483647").Time() !=
+         Date(dRef.Time() - hugeDrift).Cron("0 0 0 1 1").Time() + hugeDrift)
+      return Fail("A drift reaching back before 1970 is wrong");
+   Date dPast(1950, 6, 15, 12, 0, 0);
+   if (!dPast.AddYear(-100) || dPast.Str() != "1850-06-15 12:00:00" ||
+       !dPast.AddMonth(12 * 2000) || dPast.Str() != "3850-06-15 12:00:00")
+      return Fail("Moving a date far before 1970 or after 3000 is wrong");
+
    // Moments that can't be shown as a local date are refused, not left
    // holding garbage
    bool outOfRange = false;
@@ -832,7 +854,7 @@ static int CheckParser()
       const char *iscBefore, *iscAfter;  // crontab format (NULL: none)
       int from[3], to[3];                // dates the matches are collected over
       int fromHour, toHour;              // (hours on those dates)
-      const int (Date::*get)() const;
+      int (Date::*get)() const;
    };
    const Window windows[] = {
       {0, 59, "", "", NULL, NULL, {2025, 1, 15}, {2025, 1, 15}, 0, 0, &Date::Sec},
@@ -1027,7 +1049,7 @@ static int CheckExtras()
    return 0;
 }
 
-int main(int argc, char **argv)
+int main()
 {
    /* Create Reference Time */
    Date dObjStart;

@@ -1,0 +1,4 @@
+# These packages are built from the project's own repository rather than
+# uploaded to Debian, so there is no "intent to package" bug for the first
+# changelog entry to close.
+initial-upload-closes-no-bugs

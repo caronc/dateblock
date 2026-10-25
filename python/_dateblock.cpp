@@ -138,8 +138,48 @@ static PyObject *DateToPy(const Date &date)
                                      0);
 }
 
+// 1970-01-01 00:00:00 UTC (set up when the module loads)
+static PyObject *g_epoch = NULL;
+
+// The moment 't' (seconds since the epoch) as an aware datetime in
+// 'tzinfo', like datetime.fromtimestamp(t, tzinfo).  It is worked out as
+// (1970-01-01 UTC + timedelta(seconds=t)).astimezone(tzinfo) instead,
+// which needs nothing from the operating system: fromtimestamp() can't go
+// before 1970 or past the year 3000 on Windows, this works for any year
+// a datetime can hold.  Returns NULL with an error set on failure.
+static PyObject *FromTimestamp(time_t t, PyObject *tzinfo)
+{
+   long long days = (long long) t / 86400;
+   long long secs = (long long) t % 86400;
+   if (secs < 0)
+   {
+      secs += 86400;
+      days--;
+   }
+   if (days > 999999999 || days < -999999999)
+   {
+      PyErr_SetString(PyExc_OverflowError,
+            "The time is outside of the supported range.");
+      return NULL;
+   }
+   PyObject *delta = PyDelta_FromDSU((int) days, (int) secs, 0);
+   if (delta == NULL)
+   {
+      return NULL;
+   }
+   PyObject *utc = PyNumber_Add(g_epoch, delta);
+   Py_DECREF(delta);
+   if (utc == NULL)
+   {
+      return NULL;
+   }
+   PyObject *local = PyObject_CallMethod(utc, "astimezone", "O", tzinfo);
+   Py_DECREF(utc);
+   return local;
+}
+
 // A Python tzinfo, seen through the engine's Date::TimeZone hook.
-//  - The local time comes from datetime.fromtimestamp(t, tzinfo), so any
+//  - The local time comes from FromTimestamp(t, tzinfo), so any
 //    tzinfo works (zoneinfo, datetime.timezone, dateutil, pytz) and its
 //    own daylight saving rules are used.
 //  - Only use it while holding the GIL.
@@ -155,9 +195,8 @@ class PyZone : public Date::TimeZone
         {
            return false;
         }
-        PyObject *dt = PyObject_CallMethod(
-              (PyObject *) PyDateTimeAPI->DateTimeType, "fromtimestamp",
-              "LO", (long long) t, m_tzinfo);
+
+        PyObject *dt = FromTimestamp(t, m_tzinfo);
         if (dt == NULL)
         {
            return false;
@@ -269,9 +308,7 @@ static PyObject *CronInZone(const char *cron, bool isc, PyObject *ref,
       SetCronError();
       return NULL;
    }
-   return PyObject_CallMethod((PyObject *) PyDateTimeAPI->DateTimeType,
-                              "fromtimestamp", "LO", (long long) when,
-                              tzinfo);
+   return FromTimestamp(when, tzinfo);
 }
 
 // For a timezone aware datetime or time, returns a new reference to the
@@ -449,6 +486,14 @@ PyMODINIT_FUNC PyInit__dateblock(void)
 {
    PyDateTime_IMPORT;
    if (PyDateTimeAPI == NULL)
+   {
+      return NULL;
+   }
+
+   g_epoch = PyDateTimeAPI->DateTime_FromDateAndTime(
+         1970, 1, 1, 0, 0, 0, 0, PyDateTimeAPI->TimeZone_UTC,
+         PyDateTimeAPI->DateTimeType);
+   if (g_epoch == NULL)
    {
       return NULL;
    }

@@ -68,6 +68,13 @@ build)
    python3 setup.py -q build -b /tmp/pybuild --build-lib /tmp/pylib
    TZ=UTC PYTHONPATH=/tmp/pylib python3 -m unittest discover -v -s python/tests
 
+   # ...and once more acting like Windows, whose own date functions only
+   # work from 1970 to the year 3000 (the code works around that)
+   CFLAGS=-DDATEBLOCK_TEST_NARROW_TIME python3 setup.py -q build \
+      -b /tmp/pybuild-narrow --build-lib /tmp/pylib-narrow
+   TZ=UTC PYTHONPATH=/tmp/pylib-narrow \
+      python3 -m unittest discover -s python/tests
+
    make dist
    cp dateblock-$version.tar.gz /out/
    ;;

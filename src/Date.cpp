@@ -59,40 +59,113 @@ namespace {
       return (month == 1 && leap) ? 29 : days[month];
    }
 
-   // Thread safe localtime() (Windows spells it localtime_s).  Fails for
-   // times whose year doesn't fit in an int (Year() adds 1900 to tm_year).
+   // Windows' localtime_s() and mktime() only work from 1970 to the year
+   // 3000.  DATEBLOCK_TEST_NARROW_TIME makes other systems act the same way,
+   // so the work-around below can be tested anywhere.
+   #if defined(_WIN32) || defined(DATEBLOCK_TEST_NARROW_TIME)
+   #define DATEBLOCK_NARROW_TIME
+   #endif
+
+   #ifdef DATEBLOCK_NARROW_TIME
+   // 3000-12-31 23:59:59 UTC, the last moment Windows can convert
+   const long long NARROW_LAST = 32535215999LL;
+   #endif
+
+   // The calendar (leap years and weekdays included) repeats every 400 years
+   const long long CALENDAR_CYCLE = 146097LL * 86400;
+
+   // The system's own thread safe localtime()
+   bool SystemLocalTime(time_t t, struct tm& tmOut)
+   {
+   #ifdef _WIN32
+      return localtime_s(&tmOut, &t) == 0;
+   #else
+   #ifdef DATEBLOCK_TEST_NARROW_TIME
+      if (t < 0 || t > NARROW_LAST)
+         return false;
+   #endif
+      return localtime_r(&t, &tmOut) != NULL;
+   #endif
+   }
+
+   // The system's own mktime(), reporting failure.  mktime() returns -1
+   // both on failure and for one real second (1969-12-31 23:59:59 UTC); it
+   // only fills in tm_wday when it works, which tells the two apart.
+   bool SystemMakeTime(struct tm& tmIo, time_t& tOut)
+   {
+      struct tm tmp = tmIo;
+      tmp.tm_wday = -1;
+      time_t t = mktime(&tmp);
+      if (t == (time_t)-1 && tmp.tm_wday == -1)
+         return false;
+   #ifdef DATEBLOCK_TEST_NARROW_TIME
+      if (t < 0 || t > NARROW_LAST)
+         return false;
+   #endif
+      tmIo = tmp;
+      tOut = t;
+      return true;
+   }
+
+   // Thread safe localtime().  Fails for times whose year doesn't fit in an
+   // int (Year() adds 1900 to tm_year).
    bool LocalTime(time_t tVal, struct tm& tmOut)
    {
       struct tm tmp;
-   #ifdef _WIN32
-      if (localtime_s(&tmp, &tVal) != 0)
-         return false;
-   #else
-      if (localtime_r(&tVal, &tmp) == NULL)
-         return false;
+      long long cycles = 0;
+   #ifdef DATEBLOCK_NARROW_TIME
+      // Outside of what the system can do, work out the same moment a
+      // whole number of 400 year cycles away (somewhere from 2000 to 2399)
+      // and move the year back afterwards
+      if (tVal < 0 || tVal > NARROW_LAST - 2 * 86400)
+      {
+         if (tVal < -(1LL << 62) || tVal > (1LL << 62))
+            return false;
+         long long fromBase = (long long)tVal - 946684800LL;  // 2000-01-01
+         cycles = fromBase / CALENDAR_CYCLE;
+         if (fromBase % CALENDAR_CYCLE < 0)
+            cycles--;
+         tVal = (time_t)(tVal - cycles * CALENDAR_CYCLE);
+      }
    #endif
-      if (tmp.tm_year > INT_MAX - 1900)
+      if (!SystemLocalTime(tVal, tmp))
          return false;
+      long long year = (long long)tmp.tm_year + cycles * 400;
+      if (year < INT_MIN || year > INT_MAX - 1900)
+         return false;
+      tmp.tm_year = (int)year;
       tmOut = tmp;
       return true;
    }
 
    // mktime() that reports failure.  'tmOut' and 'tOut' are only changed
-   // when it works.
-   //  - mktime() returns -1 both on failure and for one real second
-   //    (1969-12-31 23:59:59 UTC); it only fills in tm_wday when it works,
-   //    which tells the two apart.
-   //  - Years that don't fit in an int (once 1900 is added) fail too.
+   // when it works.  Years that don't fit in an int (once 1900 is added)
+   // fail too.
    bool MakeTime(const struct tm& tmIn, struct tm& tmOut, time_t& tOut)
    {
       struct tm tmp = tmIn;
-      tmp.tm_wday = -1;
-      time_t t = mktime(&tmp);
-      if ((t == (time_t)-1 && tmp.tm_wday == -1) ||
-          tmp.tm_year > INT_MAX - 1900)
+      long long cycles = 0;
+   #ifdef DATEBLOCK_NARROW_TIME
+      // The same idea as LocalTime(): move a year the system can't handle
+      // into 2000 to 2399 first
+      long long year = (long long)tmp.tm_year + 1900 + tmp.tm_mon / 12;
+      if (year < 1971 || year > 2999)
+      {
+         cycles = (year - 2000) / 400;
+         if ((year - 2000) % 400 < 0)
+            cycles--;
+         tmp.tm_year = (int)(tmp.tm_year - cycles * 400);
+      }
+   #endif
+      time_t t;
+      if (!SystemMakeTime(tmp, t))
          return false;
+      long long year2 = (long long)tmp.tm_year + cycles * 400;
+      if (year2 < INT_MIN || year2 > INT_MAX - 1900)
+         return false;
+      tmp.tm_year = (int)year2;
       tmOut = tmp;
-      tOut = t;
+      tOut = (time_t)(t + cycles * CALENDAR_CYCLE);
       return true;
    }
 
@@ -224,7 +297,7 @@ namespace {
    // The calendar (leap years and weekdays included) repeats every 400
    // years.  If nothing matches within that long, nothing ever will (ie:
    // the 31st of February).
-   const time_t SEARCH_HORIZON = (time_t)146097 * 86400;
+   const time_t SEARCH_HORIZON = (time_t)CALENDAR_CYCLE;
 
    // What the local time has to look like to match.  Bit 'n' of a mask
    // set means value 'n' is allowed.
@@ -355,16 +428,18 @@ namespace {
       return true;
    }
 
-   // Moves 't' forward to a local date/time ('zone' NULL uses mktime()).
+   // Moves 't' forward to a local date/time ('zone' NULL uses MakeTime()).
    // It always moves forward, even if the clock change around a daylight
    // saving switch makes the result land a little early.
    time_t JumpTo(const Date::TimeZone* zone, time_t t, struct tm target)
    {
       time_t next;
+      struct tm made;
       if (zone == NULL)
       {
          target.tm_isdst = -1;
-         next = mktime(&target);
+         if (!MakeTime(target, made, next))
+            next = t;
       }
       else if (!ZoneMakeTime(zone, target, next))
       {
@@ -1013,7 +1088,7 @@ void Date::Set(const struct tm &tmObj)
 //  Function: Operator ==
 //
 //------------------------------------------------
-const bool Date::operator==(const Date& right) const
+bool Date::operator==(const Date& right) const
 {
    return (m_time == right.m_time);
 }
@@ -1023,7 +1098,7 @@ const bool Date::operator==(const Date& right) const
 //  Function: Operator !=
 //
 //------------------------------------------------
-const bool Date::operator!=(const Date& right) const
+bool Date::operator!=(const Date& right) const
 {
    return (m_time != right.m_time);
 }
@@ -1033,7 +1108,7 @@ const bool Date::operator!=(const Date& right) const
 //  Function: Operator <
 //
 //------------------------------------------------
-const bool Date::operator<(const Date& right) const
+bool Date::operator<(const Date& right) const
 {
    return (m_time < right.m_time);
 }
@@ -1043,7 +1118,7 @@ const bool Date::operator<(const Date& right) const
 //  Function: Operator <=
 //
 //------------------------------------------------
-const bool Date::operator<=(const Date& right) const
+bool Date::operator<=(const Date& right) const
 {
    return (m_time <= right.m_time);
 }
@@ -1053,7 +1128,7 @@ const bool Date::operator<=(const Date& right) const
 //  Function: Operator >
 //
 //------------------------------------------------
-const bool Date::operator>(const Date& right) const
+bool Date::operator>(const Date& right) const
 {
    return (m_time > right.m_time);
 }
@@ -1063,7 +1138,7 @@ const bool Date::operator>(const Date& right) const
 //  Function: Operator >=
 //
 //------------------------------------------------
-const bool Date::operator>=(const Date& right) const
+bool Date::operator>=(const Date& right) const
 {
    return (m_time >= right.m_time);
 }
@@ -1073,7 +1148,7 @@ const bool Date::operator>=(const Date& right) const
 //  Function: MaxDOMsThisMonth
 //
 //------------------------------------------------
-const int Date::MaxDOMsThisMonth() const
+int Date::MaxDOMsThisMonth() const
 {
    return DaysInMonth(m_tmObj.tm_year + 1900, m_tmObj.tm_mon);
 }
@@ -1083,7 +1158,7 @@ const int Date::MaxDOMsThisMonth() const
 //  Function: MaxDOMsNextMonth
 //
 //------------------------------------------------
-const int Date::MaxDOMsNextMonth() const
+int Date::MaxDOMsNextMonth() const
 {
    int month = m_tmObj.tm_mon + 1;
    int year = m_tmObj.tm_year + 1900;
@@ -1100,7 +1175,7 @@ const int Date::MaxDOMsNextMonth() const
 //  Function: MaxDOMsPrevMonth
 //
 //------------------------------------------------
-const int Date::MaxDOMsPrevMonth() const
+int Date::MaxDOMsPrevMonth() const
 {
    int month = m_tmObj.tm_mon - 1;
    int year = m_tmObj.tm_year + 1900;
@@ -1118,7 +1193,7 @@ const int Date::MaxDOMsPrevMonth() const
 //  Function: AddSec
 //
 //------------------------------------------------
-const bool Date::AddSec(const int seconds)
+bool Date::AddSec(const int seconds)
 {
    // Aquire Time Now
    struct tm tmTime;
@@ -1138,7 +1213,7 @@ const bool Date::AddSec(const int seconds)
 //  Function: AddMin
 //
 //------------------------------------------------
-const bool Date::AddMin(const int minutes)
+bool Date::AddMin(const int minutes)
 {
    // Aquire Time Now
    struct tm tmTime;
@@ -1158,7 +1233,7 @@ const bool Date::AddMin(const int minutes)
 //  Function: AddHour
 //
 //------------------------------------------------
-const bool Date::AddHour(const int hours)
+bool Date::AddHour(const int hours)
 {
    // Aquire Time Now
    struct tm tmTime;
@@ -1180,7 +1255,7 @@ const bool Date::AddHour(const int hours)
 //  Function: AddDOM
 //
 //------------------------------------------------
-const bool Date::AddDOM(const int days)
+bool Date::AddDOM(const int days)
 {
    // Aquire Time Now
    struct tm tmTime;
@@ -1200,7 +1275,7 @@ const bool Date::AddDOM(const int days)
 //  Function: AddMonth
 //
 //------------------------------------------------
-const bool Date::AddMonth(const int months)
+bool Date::AddMonth(const int months)
 {
    struct tm tmTime;
 
@@ -1238,7 +1313,7 @@ const bool Date::AddMonth(const int months)
 //  Function: AddYear
 //
 //------------------------------------------------
-const bool Date::AddYear(const int years)
+bool Date::AddYear(const int years)
 {
    struct tm tmTime;
    memcpy(&tmTime,&m_tmObj,sizeof(struct tm));
@@ -1256,7 +1331,7 @@ const bool Date::AddYear(const int years)
 //  Function: SetSec
 //
 //------------------------------------------------
-const bool Date::SetSec(const int seconds)
+bool Date::SetSec(const int seconds)
 {
    if(seconds < T_SEC_MIN || seconds > T_SEC_MAX)
    {
@@ -1272,7 +1347,7 @@ const bool Date::SetSec(const int seconds)
 //  Function: SetMin
 //
 //------------------------------------------------
-const bool Date::SetMin(const int minutes)
+bool Date::SetMin(const int minutes)
 {
    if(minutes < T_MIN_MIN || minutes > T_MIN_MAX)
    {
@@ -1288,7 +1363,7 @@ const bool Date::SetMin(const int minutes)
 //  Function: SetHour
 //
 //------------------------------------------------
-const bool Date::SetHour(const int hours)
+bool Date::SetHour(const int hours)
 {
    if(hours < T_HOUR_MIN || hours > T_HOUR_MAX)
    {
@@ -1304,7 +1379,7 @@ const bool Date::SetHour(const int hours)
 //  Function: SetDOM
 //
 //------------------------------------------------
-const bool Date::SetDOM(const int days)
+bool Date::SetDOM(const int days)
 {
    if(days < T_DOM_MIN || days > T_DOM_MAX)
    {
@@ -1322,7 +1397,7 @@ const bool Date::SetDOM(const int days)
 //  Function: SetMonth
 //
 //------------------------------------------------
-const bool Date::SetMonth(const int months)
+bool Date::SetMonth(const int months)
 {
    if(months < T_MONTH_MIN || months > T_MONTH_MAX)
    {
@@ -1338,7 +1413,7 @@ const bool Date::SetMonth(const int months)
 //  Function: SetYear
 //
 //------------------------------------------------
-const bool Date::SetYear(const int years)
+bool Date::SetYear(const int years)
 {
    if(years < T_YEAR_MIN || years > T_YEAR_MAX)
    {

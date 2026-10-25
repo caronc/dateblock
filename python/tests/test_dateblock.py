@@ -330,10 +330,9 @@ class DateblockTests(unittest.TestCase):
                 db(cron, block=False)
 
     def test_result_past_year_9999_raises_before_blocking(self):
-        # Windows can't work with dates past the year 3000 at all, so it
-        # refuses the reference itself (OverflowError)
+        # A Python datetime stops at the year 9999
         start = _time.monotonic()
-        with self.assertRaises((ValueError, OverflowError)):
+        with self.assertRaises(ValueError):
             db("0 0 0 1 1", ref=datetime(9999, 6, 1))
         self.assertLess(_time.monotonic() - start, 1)
 
@@ -423,6 +422,32 @@ class DateblockTests(unittest.TestCase):
                     except (SyntaxError, ValueError):
                         continue
                     self.assertGreater(result, ref)
+
+    def test_dates_before_1970_and_after_3000(self):
+        # Windows' own date functions only work from 1970 to the year 3000
+        self.assertEqual(db("0 0 0 29 2", ref=date(1896, 3, 1), block=False),
+                         datetime(1904, 2, 29))
+        self.assertEqual(db("0 0 0 29 2", ref=date(3999, 3, 1), block=False),
+                         datetime(4000, 2, 29))
+        self.assertEqual(db("*/1", ref=datetime(1601, 1, 1), block=False),
+                         datetime(1601, 1, 1, 0, 0, 1))
+        plus9 = timezone(timedelta(hours=9))
+        self.assertEqual(
+            db("0 0 9", ref=datetime(1950, 1, 1, tzinfo=plus9), block=False),
+            datetime(1950, 1, 1, 9, tzinfo=plus9))
+        self.assertEqual(
+            db("0 0 9", ref=datetime(3500, 1, 1, tzinfo=plus9), block=False),
+            datetime(3500, 1, 1, 9, tzinfo=plus9))
+
+    def test_huge_drift_searches_back_before_1970(self):
+        # A 68 year drift from 2024 starts its search in 1956 (and finds
+        # 1957-01-01 there, plus the drift)
+        ref = datetime(2024, 2, 29, 23, 59, 59, tzinfo=timezone.utc)
+        self.assertEqual(db("0 0 0 1 1 * 2147483647", ref=ref, block=False),
+                         datetime(2025, 1, 19, 3, 14, 7, tzinfo=timezone.utc))
+        naive = datetime(2024, 2, 29, 23, 59, 59)
+        self.assertGreater(db("0 0 0 1 1 * 2147483647", ref=naive,
+                              block=False), naive)
 
     def test_bad_argument_types(self):
         with self.assertRaises(TypeError):

@@ -14,6 +14,7 @@ EXTRA_DIST = \
 	README.md \
 	INSTALL.md \
 	COPYING \
+	LICENSE \
 	ChangeLog \
 	AUTHORS \
 	packaging/README.md \
@@ -28,6 +29,10 @@ EXTRA_DIST = \
 	packaging/debian/dateblock.install \
 	packaging/debian/libdateblock1.install \
 	packaging/debian/libdateblock-dev.install \
+	packaging/debian/dateblock.lintian-overrides \
+	packaging/debian/libdateblock1.lintian-overrides \
+	packaging/debian/libdateblock-dev.lintian-overrides \
+	packaging/debian/python3-dateblock.lintian-overrides \
 	packaging/arch/PKGBUILD \
 	packaging/docker/build.sh \
 	packaging/docker/Dockerfile.f44 \

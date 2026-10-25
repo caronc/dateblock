@@ -29,3 +29,12 @@ bin_PROGRAMS = dateblock
 dateblock_SOURCES = dateblock.cpp dateblock.h
 dateblock_LDADD = libdateblock.la $(BOOST_PROGRAM_OPTIONS_LIBS)
 
+# Installing into a staging folder (make install DESTDIR=..., as every
+# package build does) makes libtool print harmless warnings: the library
+# isn't in its final folder yet, and ldconfig can't run there.  Keep those
+# quiet while installing, but not while compiling or linking (each target's
+# own flags below replace AM_LIBTOOLFLAGS for those steps).
+AM_LIBTOOLFLAGS = --no-warnings
+libdateblock_la_LIBTOOLFLAGS =
+dateblock_LIBTOOLFLAGS =
+

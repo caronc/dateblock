@@ -82,12 +82,12 @@ class Date
      Date(const Date& dateObjIn);
      ~Date();
 
-     const bool operator==(const Date&) const;
-     const bool operator<(const Date&) const;
-     const bool operator<=(const Date&) const;
-     const bool operator>(const Date&) const;
-     const bool operator>=(const Date&) const;
-     const bool operator!=(const Date& right) const;
+     bool operator==(const Date&) const;
+     bool operator<(const Date&) const;
+     bool operator<=(const Date&) const;
+     bool operator>(const Date&) const;
+     bool operator>=(const Date&) const;
+     bool operator!=(const Date& right) const;
 
      // Assignments
      const Date & operator=(const Date&);
@@ -104,37 +104,37 @@ class Date
      void Set(const time_t &);
      void Set(const struct tm &);
 
-     const bool AddSec(const int seconds = 1);
-     const bool AddMin(const int minutes = 1);
-     const bool AddHour(const int hours = 1);
-     const bool AddDOM(const int days = 1);
-     const bool AddMonth(const int months = 1);
-     const bool AddYear(const int years = 1);
+     bool AddSec(const int seconds = 1);
+     bool AddMin(const int minutes = 1);
+     bool AddHour(const int hours = 1);
+     bool AddDOM(const int days = 1);
+     bool AddMonth(const int months = 1);
+     bool AddYear(const int years = 1);
 
-     const bool SetSec(const int seconds = 0);
-     const bool SetMin(const int minutes = 0);
-     const bool SetHour(const int hours = 0);
-     const bool SetDOM(const int days = 1);
-     const bool SetMonth(const int months = 1);
-     const bool SetYear(const int years);
+     bool SetSec(const int seconds = 0);
+     bool SetMin(const int minutes = 0);
+     bool SetHour(const int hours = 0);
+     bool SetDOM(const int days = 1);
+     bool SetMonth(const int months = 1);
+     bool SetYear(const int years);
 
-     const time_t Time()const;
+     time_t Time()const;
      const struct tm& Tm()const;
 
      // returns a string based on passed in format (uses strftime codes)
      const std::string Str(const std::string& format="%Y-%m-%d %H:%M:%S") const;
 
-     const int Sec() const; // returns 0-59
-     const int Min() const; // returns 0-59
-     const int Hour() const; // returns 0-23
-     const int DOM() const; // returns 1-31
-     const int Month() const; // returns 1-12 Jan=1, Dec=12
-     const int Year() const; // returns 1980 and +
-     const int DOW() const; // returns 0-6
+     int Sec() const; // returns 0-59
+     int Min() const; // returns 0-59
+     int Hour() const; // returns 0-23
+     int DOM() const; // returns 1-31
+     int Month() const; // returns 1-12 Jan=1, Dec=12
+     int Year() const; // returns 1980 and +
+     int DOW() const; // returns 0-6
 
-     const int MaxDOMsThisMonth() const; // returns 1-31
-     const int MaxDOMsNextMonth() const; // returns 1-31
-     const int MaxDOMsPrevMonth() const; // returns 1-31
+     int MaxDOMsThisMonth() const; // returns 1-31
+     int MaxDOMsNextMonth() const; // returns 1-31
+     int MaxDOMsPrevMonth() const; // returns 1-31
 
      // A more advanced cron that calculates cron syntax such as:
      // 0-4,6      (which would handle 0,1,2,3,4,6)
@@ -258,7 +258,7 @@ class Date
      time_t m_time;
 };
 
-inline const time_t Date::Time() const
+inline time_t Date::Time() const
 {
    return m_time;
 }
@@ -267,31 +267,31 @@ inline const struct tm& Date::Tm() const
 {
    return m_tmObj;
 }
-inline const int Date::Sec() const
+inline int Date::Sec() const
 {
    return m_tmObj.tm_sec;
 }
-inline const int Date::Min() const
+inline int Date::Min() const
 {
    return m_tmObj.tm_min;
 }
-inline const int Date::Hour() const
+inline int Date::Hour() const
 {
    return m_tmObj.tm_hour;
 }
-inline const int Date::DOM() const
+inline int Date::DOM() const
 {
    return m_tmObj.tm_mday;
 }
-inline const int Date::Month() const
+inline int Date::Month() const
 {
    return m_tmObj.tm_mon + 1;
 }
-inline const int Date::DOW() const
+inline int Date::DOW() const
 {
    return m_tmObj.tm_wday;
 }
-inline const int Date::Year() const
+inline int Date::Year() const
 {
    return m_tmObj.tm_year + 1900;
 }
