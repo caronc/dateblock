@@ -124,8 +124,33 @@ static int CheckLeapYears()
        !Expect("0 0 0 28,29 2", false, 2023, 2, 28, 12, 0, 0, "2024-02-28 00:00:00"))
       return Fail("Feb 28th/29th was not found");
 
+   // 1900 was not a leap year, 2000 was
+   if (!Expect("0 0 0 29 2", false, 1896, 3, 1, 0, 0, 0, "1904-02-29 00:00:00") ||
+       !Expect("0 0 0 29 2", false, 1999, 3, 1, 0, 0, 0, "2000-02-29 00:00:00"))
+      return Fail("The century leap year rule is wrong");
+
+   // Dateblock format: Feb 29th AND one of the listed weekdays
+   if (!Expect("0 0 0 29 2 0-6", false, 2025, 3, 1, 0, 0, 0, "2028-02-29 00:00:00") ||
+       !Expect("0 0 0 29 2 1,3,5", false, 2025, 3, 1, 0, 0, 0, "2036-02-29 00:00:00") ||
+       !Expect("0 0 0 1-7 * 1", false, 2025, 6, 3, 0, 0, 0, "2025-07-07 00:00:00"))
+      return Fail("Leap day AND weekday is wrong");
+
+   // crontab: Feb 29th OR a listed weekday in February; a '*' day of the
+   // week means only Feb 29th counts
+   if (!Expect("0 0 29 2 1", true, 2025, 3, 1, 0, 0, 0, "2026-02-02 00:00:00") ||
+       !Expect("0 0 29 2 0,6", true, 2024, 2, 26, 0, 0, 0, "2024-02-29 00:00:00") ||
+       !Expect("0 0 29 2 *", true, 2025, 3, 1, 0, 0, 0, "2028-02-29 00:00:00") ||
+       !Expect("0 0 29,30,31 2 *", true, 2025, 3, 1, 0, 0, 0, "2028-02-29 00:00:00") ||
+       !Expect("0 0 1-7 * 1", true, 2025, 6, 3, 0, 0, 0, "2025-06-04 00:00:00"))
+      return Fail("Leap day OR weekday (isc) is wrong");
+
+   // An impossible day still matches through its weekday with crontab
+   if (!Expect("0 0 30 2 1", true, 2025, 3, 1, 0, 0, 0, "2026-02-02 00:00:00"))
+      return Fail("Feb 30th OR Monday (isc) should match a Monday");
+
    // Days that never happen
    if (!Expect("0 0 0 30 2", false, 2024, 1, 1, 0, 0, 0, "") ||
+       !Expect("0 0 30 2 *", true, 2024, 1, 1, 0, 0, 0, "") ||
        !Expect("0 0 0 31 4,6,9,11", false, 2024, 1, 1, 0, 0, 0, ""))
       return Fail("An impossible day was found");
    return 0;
@@ -229,6 +254,33 @@ static int CheckHardening()
       }
    }
 
+   // Empty list entries and a '+' with no drift are refused
+   const char *empty[] = {",", "5,", ",5", "5,,6", "* 5 +", "+"};
+   for (unsigned i = 0; i < sizeof(empty)/sizeof(empty[0]); i++)
+   {
+      if (Date::CronValid(empty[i]))
+      {
+         cerr << "FATAL: '" << empty[i] << "' was accepted" << endl;
+         return 1;
+      }
+   }
+
+   // Adding a huge number of months or years is instant and never
+   // overflows the year
+   clock_t added = clock();
+   Date dAdd(2025, 1, 31, 0, 0, 0);
+   if (!dAdd.AddMonth(-25) || dAdd.Str() != "2022-12-31 00:00:00")
+      return Fail("AddMonth(-25) is wrong");
+   if (!dAdd.AddMonth(14) || dAdd.Str() != "2024-02-29 00:00:00")
+      return Fail("AddMonth(14) should stop at the end of February");
+   Date dHuge(2025, 1, 1, 0, 0, 0);
+   dHuge.AddMonth(2147483647);
+   dHuge.AddMonth(-2147483647 - 1);
+   if (dHuge.AddYear(2147483647))
+      return Fail("AddYear() should refuse a year that doesn't fit");
+   if ((clock() - added) / CLOCKS_PER_SEC > 1)
+      return Fail("AddMonth() with a huge value took too long");
+
    // Every value of every field is still quick to work out
    clock_t started = clock();
    if (!Expect("0-59 0-59 0-23 1-31 1-12 0-6", false,
@@ -279,6 +331,94 @@ static int CheckDaylightSaving()
    return rc;
 }
 
+// The earliest of each drift worked out on its own
+static string EachDrift(const Date& start, const string& cron,
+                        const char *drifts[], unsigned count)
+{
+   string best;
+   for (unsigned i = 0; i < count; i++)
+   {
+      Date when = start.Cron(cron + " " + drifts[i]);
+      string got = when.Str("%Y%m%d%H%M%S");
+      if (best.empty() || got < best)
+         best = got;
+   }
+   return best;
+}
+
+static int CheckDriftLists()
+{
+   // A drift list gives the same answer as trying each drift by itself
+   const char *crons[] = {
+      "/1 * * * * *", "0 /10 * * * *", "30 15 */2 * * *",
+      "0 0 0 29 2 *", "0 0 0 29 2 1", "0 0 12 13 * 5", "0 0 0 1-7 * 1",
+      "/7 /11 3,15 * 2,8 *"};
+   const char *drifts[] = {"0", "1", "59", "60", "61", "3599", "3600",
+                           "86400", "90061", "2678400", "31622400",
+                           "883612800", "2147483647"};
+   const unsigned count = sizeof(drifts)/sizeof(drifts[0]);
+   const int starts[][6] = {
+      {2025, 1, 1, 0, 0, 0}, {2024, 2, 29, 23, 59, 59},
+      {2028, 2, 28, 12, 0, 0}, {2025, 6, 13, 0, 0, 0}};
+
+   for (unsigned c = 0; c < sizeof(crons)/sizeof(crons[0]); c++)
+   {
+      for (unsigned t = 0; t < sizeof(starts)/sizeof(starts[0]); t++)
+      {
+         Date start(starts[t][0], starts[t][1], starts[t][2],
+                    starts[t][3], starts[t][4], starts[t][5]);
+
+         // Every drift, then a few smaller groups of them
+         for (unsigned first = 0; first < count; first += 4)
+         {
+            string list;
+            for (unsigned i = first; i < count; i++)
+               list += (list.empty() ? "" : ",") + string(drifts[i]);
+
+            string got = start.Cron(string(crons[c]) + " " + list)
+                              .Str("%Y%m%d%H%M%S");
+            string expect = EachDrift(start, crons[c], drifts + first,
+                                      count - first);
+            if (got != expect)
+            {
+               cerr << "FATAL: '" << crons[c] << " " << list << "' from "
+                    << start.Str() << " gave " << got << ", expected "
+                    << expect << endl;
+               return 1;
+            }
+         }
+      }
+   }
+
+   // Many drifts on a schedule that rarely matches stay quick (each drift
+   // used to search on its own)
+   clock_t started = clock();
+   if (!Expect("0 0 0 29 2 1 0-9999", false, 2025, 6, 1, 0, 0, 0,
+               "2044-02-29 00:00:00") ||
+       !Expect("59 59 23 29 2 1 0-9999", false, 2081, 3, 1, 0, 0, 0,
+               "2112-02-29 23:59:59"))
+      return Fail("A long drift list on Feb 29th was wrong");
+   if ((clock() - started) / CLOCKS_PER_SEC > 1)
+      return Fail("A long drift list took too long");
+   return 0;
+}
+
+// True if working out 'cron' throws std::invalid_argument
+static bool Refused(const Date& start, const char *cron, bool isISC)
+{
+   try
+   {
+      start.Cron(cron, isISC);
+   }
+   catch (const invalid_argument&)
+   {
+      return true;
+   }
+   cerr << "FATAL: '" << cron << "'" << (isISC ? " (isc)" : "")
+        << " was accepted" << endl;
+   return false;
+}
+
 static int CheckExtras()
 {
    // Setting a date while 'today' is the 31st must not spill into the
@@ -319,6 +459,24 @@ static int CheckExtras()
    // ...but an impossible combination is skipped when another one works
    if (dFmt.Cron("0 0 0 30,31 2,3 *").Str() != "2027-03-30 00:00:00")
       return Fail("Mar 30th should have been found");
+
+   // Bad syntax throws instead of quietly returning the start time
+   if (!Refused(dFmt, "* 99", false) || !Refused(dFmt, "* 5 +20 1", false) ||
+       !Refused(dFmt, "* * * * * * * *", false) ||
+       !Refused(dFmt, "5,,6", false) || !Refused(dFmt, "99 * * * *", true) ||
+       !Refused(dFmt, "* * * * * *", true))
+      return Fail("Cron() with bad syntax did not throw");
+   bool refused = false;
+   try
+   {
+      dFmt.Cron("0", "99", "*");
+   }
+   catch (const invalid_argument&)
+   {
+      refused = true;
+   }
+   if (!refused)
+      return Fail("Cron() with a bad minute field did not throw");
 
    // Inline drift; nothing may follow it
    if (!Date::CronValid("* 5 +20") || Date::CronValid("* 5 +20 1"))
@@ -409,7 +567,8 @@ int main(int argc, char **argv)
    }
 
    if (CheckExtras() || CheckLeapYears() || CheckDayMatching() ||
-       CheckUnsetFields() || CheckSteps() || CheckHardening() || CheckDaylightSaving())
+       CheckUnsetFields() || CheckSteps() || CheckHardening() ||
+       CheckDriftLists() || CheckDaylightSaving())
       return 1;
    return 0;
 }

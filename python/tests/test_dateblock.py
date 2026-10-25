@@ -130,6 +130,64 @@ class DateblockTests(unittest.TestCase):
             db("0 0 0 29 2 1", ref=date(2081, 3, 1), block=False),
             datetime(2112, 2, 29))
 
+    def test_century_leap_years(self):
+        # 2100 is not a leap year, 2400 is
+        self.assertEqual(db("0 0 0 29 2", ref=date(2097, 3, 1), block=False),
+                         datetime(2104, 2, 29))
+        self.assertEqual(db("0 0 0 29 2", ref=date(2399, 3, 1), block=False),
+                         datetime(2400, 2, 29))
+
+    def test_leap_day_and_weekday_list(self):
+        self.assertEqual(
+            db("0 0 0 29 2 1,3,5", ref=date(2025, 3, 1), block=False),
+            datetime(2036, 2, 29))
+
+    def test_isc_leap_day_or_weekday(self):
+        # Feb 29th OR any Monday in February
+        self.assertEqual(
+            db("0 0 29 2 1", isc=True, ref=date(2025, 3, 1), block=False),
+            datetime(2026, 2, 2))
+        # A '*' weekday means only Feb 29th counts
+        self.assertEqual(
+            db("0 0 29 2 *", isc=True, ref=date(2025, 3, 1), block=False),
+            datetime(2028, 2, 29))
+
+    def test_isc_impossible_day_matches_its_weekday(self):
+        self.assertEqual(
+            db("0 0 30 2 1", isc=True, ref=date(2025, 3, 1), block=False),
+            datetime(2026, 2, 2))
+        with self.assertRaises(ValueError):
+            db("0 0 30 2 *", isc=True, block=False)
+
+    def test_long_drift_list_on_a_rare_day_is_quick(self):
+        start = _time.monotonic()
+        self.assertEqual(
+            db("0 0 0 29 2 1 0-9999", ref=date(2025, 6, 1), block=False),
+            datetime(2044, 2, 29))
+        self.assertLess(_time.monotonic() - start, 1)
+
+    def test_drift_list_matches_each_drift_alone(self):
+        ref = datetime(2024, 2, 29, 23, 59, 59)
+        drifts = ["0", "61", "3600", "90061", "31622400", "2147483647"]
+        for cron in ("0 /10", "0 0 0 29 2", "/7 /11 3,15 * 2,8"):
+            alone = min(db("%s +%s" % (cron, d), ref=ref, block=False)
+                        for d in drifts)
+            self.assertEqual(
+                db("%s +%s" % (cron, ",".join(drifts)), ref=ref,
+                   block=False),
+                alone)
+
+    def test_empty_list_entries_raise_syntax_error(self):
+        for cron in (",", "5,", "5,,6", "* 5 +"):
+            with self.assertRaises(SyntaxError):
+                db(cron, block=False)
+
+    def test_result_past_year_9999_raises_before_blocking(self):
+        start = _time.monotonic()
+        with self.assertRaises(ValueError):
+            db("0 0 0 1 1", ref=datetime(9999, 6, 1))
+        self.assertLess(_time.monotonic() - start, 1)
+
     def test_day_of_month_and_week_both_match(self):
         self.assertEqual(db("0 0 0 1 * 1", ref=date(2025, 6, 3), block=False),
                          datetime(2025, 9, 1))

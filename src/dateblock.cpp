@@ -266,29 +266,29 @@ int main(int argc, char **argv)
       //   << "," << sDomOffset
       //   << "," << sMonthOffset
       //   << "," << sDowOffset << ");" << endl;
-      if(!Date::CronValid(sSecOffset,
-                            sMinOffset,
-                            sHourOffset,
-                            sDomOffset,
-                            sMonthOffset,
-                            sDowOffset,
-                            sDriftOffset))
-      {
-         cerr << "Error: Syntax Invalid : '"
-            << sSecOffset
-            << " " << sMinOffset
-            << " " << sHourOffset
-            << " " << sDomOffset
-            << " " << sMonthOffset
-            << " " << sDowOffset
-            << " " << sDriftOffset
-            << "'" << endl;
-            ProgramExamples();
-         return 1;
-      }
-
       try
       {
+         if(!Date::CronValid(sSecOffset,
+                               sMinOffset,
+                               sHourOffset,
+                               sDomOffset,
+                               sMonthOffset,
+                               sDowOffset,
+                               sDriftOffset))
+         {
+            cerr << "Error: Syntax Invalid : '"
+               << sSecOffset
+               << " " << sMinOffset
+               << " " << sHourOffset
+               << " " << sDomOffset
+               << " " << sMonthOffset
+               << " " << sDowOffset
+               << " " << sDriftOffset
+               << "'" << endl;
+               ProgramExamples();
+            return 1;
+         }
+
          dObjFinish = dObjStart.Cron(sSecOffset,
                         sMinOffset,
                         sHourOffset,
@@ -318,16 +318,16 @@ int main(int argc, char **argv)
       sCronStr = poVariablesMap["cron"].as<string>();
       //cout << "Executing Cron(\""
       //     << sCronStr << "\");" << endl;
-      if(!Date::CronValid(sCronStr, useISC))
-      {
-         cerr << "Error: Syntax Invalid : '"
-            << sCronStr << "'" << endl;
-            ProgramExamples();
-         return 1;
-      }
-
       try
       {
+         if(!Date::CronValid(sCronStr, useISC))
+         {
+            cerr << "Error: Syntax Invalid : '"
+               << sCronStr << "'" << endl;
+               ProgramExamples();
+            return 1;
+         }
+
          dObjFinish = dObjStart.Cron(sCronStr, useISC);
       }
       catch (const runtime_error& e)

@@ -204,14 +204,13 @@ static PyObject *dateblock(PyObject *self, PyObject *args, PyObject *kwds)
    Date dObjFinish;
    try
    {
-      if (!Date::CronValid(str, isc != 0))
-      {
-         // Raise SyntaxError Exception
-         PyErr_SetString(PyExc_SyntaxError,
-               "The cron specified is not formatted correctly.");
-         return NULL;
-      }
       dObjFinish = dObjStart.Cron(str, isc != 0);
+   }
+   catch (const std::invalid_argument &)
+   {
+      PyErr_SetString(PyExc_SyntaxError,
+            "The cron specified is not formatted correctly.");
+      return NULL;
    }
    catch (const std::runtime_error &e)
    {
@@ -226,6 +225,14 @@ static PyObject *dateblock(PyObject *self, PyObject *args, PyObject *kwds)
    catch (const std::exception &e)
    {
       PyErr_SetString(PyExc_RuntimeError, e.what());
+      return NULL;
+   }
+
+   // Build the result first; a moment Python can't represent (past the
+   // year 9999) raises right away instead of after sleeping until then
+   PyObject *result = DateToPy(dObjFinish);
+   if (result == NULL)
+   {
       return NULL;
    }
 
@@ -248,13 +255,14 @@ static PyObject *dateblock(PyObject *self, PyObject *args, PyObject *kwds)
          }
          if (PyErr_CheckSignals() < 0)
          {
+            Py_DECREF(result);
             return NULL;
          }
       }
    }
 
    // Return Finish Date/Time
-   return DateToPy(dObjFinish);
+   return result;
 }
 
 // Python Method Table.

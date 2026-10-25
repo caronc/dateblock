@@ -165,6 +165,9 @@ class Date
      //  Throws std::runtime_error if no matching moment can be found
      //  (for example the 31st of February).  All of the Cron() functions
      //  below behave the same way.
+     //  The Cron() functions that take strings also throw
+     //  std::invalid_argument if the cron is not formatted correctly (use
+     //  CronValid() to check one without an exception).
      const Date Cron(int lSecOffset   = T_NO_ENTRY,
                      int lMinOffset   = T_NO_ENTRY,
                      int lHourOffset  = T_NO_ENTRY,

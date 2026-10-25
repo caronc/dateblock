@@ -26,6 +26,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <limits>
+#include <algorithm>
 #include <set>
 #include <vector>
 #include <ctype.h>
@@ -64,11 +65,6 @@ namespace {
       return (month == 1 && leap) ? 29 : days[month];
    }
 
-   // Splits a whitespace separated cron string into its fields.
-   //  - Missing fields are filled in with '*'.
-   //  - A '+N' entry (dateblock format only) jumps straight to the drift
-   //    field; nothing may follow it.
-   //  - Returns false if the string has more fields than allowed.
    // Thread safe localtime() (Windows spells it localtime_s)
    bool LocalTime(time_t tVal, struct tm& tmOut)
    {
@@ -105,6 +101,23 @@ namespace {
       return ts.tv_sec;
    }
 
+   // Seconds from 'now' until 'until' (0 if it has passed).  Very long
+   // waits are capped instead of wrapping around to a small number (an
+   // unsigned long is only 32 bits on Windows).
+   unsigned long SecondsLeft(time_t until, time_t now)
+   {
+      if (until <= now)
+         return 0;
+      unsigned long long left = (unsigned long long)until - (unsigned long long)now;
+      const unsigned long most = numeric_limits<unsigned long>::max();
+      return (left > most) ? most : (unsigned long)left;
+   }
+
+   // Splits a whitespace separated cron string into its fields.
+   //  - Missing fields are filled in with '*'.
+   //  - A '+N' entry (dateblock format only) jumps straight to the drift
+   //    field; nothing may follow it.
+   //  - Returns false if the string has more fields than allowed.
    bool SplitCronString(const string& strIn, bool isISC,
                         vector<string>& tokens)
    {
@@ -134,6 +147,12 @@ namespace {
                tokens.push_back("*");
             token.erase(0, 1);
             drifted = true;
+            if (token.empty())
+            {
+               // A '+' with no drift after it
+               ok = false;
+               break;
+            }
          }
          tokens.push_back(token);
       }
@@ -225,6 +244,8 @@ namespace {
    time_t NextMatch(const Schedule& s, time_t after)
    {
       const time_t max = numeric_limits<time_t>::max();
+      if (after == max)
+         throw runtime_error("The reference time is out of range.");
       time_t t = after + 1;
       time_t limit = (after > max - SEARCH_HORIZON) ? max : after + SEARCH_HORIZON;
       struct tm tm;
@@ -701,41 +722,23 @@ const bool Date::AddMonth(const int months)
 
    tmTime.tm_mday = T_DOM_MIN; // Store Min Day (temporary)
 
-   int mCnt = months;
-   if(months > 0)
+   // Work out the new month and year directly (no loop), refusing years
+   // that don't fit in a struct tm
+   long long total = (long long)tmTime.tm_mon + months;
+   long long years = total / 12;
+   int month = (int)(total % 12);
+   if (month < 0)
    {
-      // Add Months
-      while(mCnt > 0)
-      {
-         if(tmTime.tm_mon == 11)
-         {
-            tmTime.tm_mon = 0;
-            tmTime.tm_year++;
-         }
-         else
-         {
-            tmTime.tm_mon++;
-         }
-         mCnt--;
-      }
+      month += 12;
+      years--;
    }
-   else
+   long long year = (long long)tmTime.tm_year + years;
+   if (year < INT_MIN || year > INT_MAX)
    {
-      // Subtract Months
-      while(mCnt < 0)
-      {
-         if(tmTime.tm_mon ==0)
-         {
-            tmTime.tm_mon=11;
-            tmTime.tm_year--;
-         }
-         else
-         {
-            tmTime.tm_mon--;
-         }
-         mCnt++;
-      }
+      return false;
    }
+   tmTime.tm_mon = month;
+   tmTime.tm_year = (int)year;
 
    m_time=mktime(&tmTime);
    memcpy(&m_tmObj,&tmTime,sizeof(struct tm));
@@ -751,7 +754,12 @@ const bool Date::AddYear(const int years)
 {
    struct tm tmTime;
    memcpy(&tmTime,&m_tmObj,sizeof(struct tm));
-   tmTime.tm_year+=years;
+   long long year = (long long)tmTime.tm_year + years;
+   if (year < INT_MIN || year > INT_MAX)
+   {
+      return false;
+   }
+   tmTime.tm_year = (int)year;
    m_time=mktime(&tmTime);
    memcpy(&m_tmObj,&tmTime,sizeof(struct tm));
    return true;
@@ -998,19 +1006,50 @@ const Date Date::CronFromLists(const set<int> lists[COMBO_COUNT],
    // A drift is added after the match.  Matching from 'now - drift' keeps
    // only the part of the drift that fits inside the schedule's interval,
    // so no match is ever skipped.  With several drifts the earliest wins.
-   bool found = false;
-   time_t best = 0;
-   const set<int>& drifts = lists[COMBO_DRIFT];
-   for (set<int>::const_iterator itr = drifts.begin();
-        itr != drifts.end(); itr++)
+   //  - Drifts are handled largest first.  One search from 'now - largest'
+   //    finds a match that every drift reaching past it shares, so those
+   //    need no search of their own; only the smallest of them can win.
+   //  - The rest start searching after that match, so the whole drift list
+   //    costs about one pass over the time it covers instead of one full
+   //    search per drift.
+   vector<time_t> drifts;
+   const set<int>& driftList = lists[COMBO_DRIFT];
+   for (set<int>::const_iterator itr = driftList.begin();
+        itr != driftList.end(); itr++)
    {
       time_t drift = (*itr > 0) ? *itr : 0;
-      time_t when = NextMatch(s, m_time - drift) + drift;
+      if (drifts.empty() || drifts.back() != drift)
+         drifts.push_back(drift);
+   }
+
+   const time_t lowest = numeric_limits<time_t>::min();
+   const time_t highest = numeric_limits<time_t>::max();
+   time_t best = 0;
+   bool found = false;
+   vector<time_t>::iterator end = drifts.end();
+   while (end != drifts.begin())
+   {
+      time_t largest = *(end - 1);
+      if (m_time < lowest + largest)
+         throw runtime_error("The reference time is out of range.");
+      time_t match = NextMatch(s, m_time - largest);
+
+      // The smallest drift that still lands after now
+      vector<time_t>::iterator use =
+         upper_bound(drifts.begin(), end, m_time - match);
+      if (match > highest - *use)
+         throw runtime_error("The matching time is out of range.");
+      time_t when = match + *use;
       if (!found || when < best)
       {
          best = when;
          found = true;
       }
+
+      // Nothing can be sooner than the very next second
+      if (best == m_time + 1)
+         break;
+      end = use;
    }
    return Date(best);
 }
@@ -1128,8 +1167,7 @@ const Date Date::Cron(const string& sSecOffset,
     ParseCronString(sDowOffset,comboList[COMBO_DOW],T_DOW_MIN,T_DOW_MAX) &&
     ParseCronString(sDriftOffset,comboList[COMBO_DRIFT],T_DRIFT_MIN,T_DRIFT_MAX)))
    {
-      // Invalid syntax; CronValid() is what reports it
-      return *this;
+      throw invalid_argument("The cron is not formatted correctly.");
    }
    return CronFromLists(comboList, false, true, true);
 }
@@ -1165,10 +1203,12 @@ const Date Date::Cron(const string& strIn, bool isISC) const
    //     -  -  -  -  -
    //     *  *  *  *  *
 
-   // Any fields beyond what is allowed are simply ignored here;
-   // CronValid() is what reports them as an error
    vector<string> v_tokens;
-   SplitCronString(strIn, isISC, v_tokens);
+   if (!SplitCronString(strIn, isISC, v_tokens))
+   {
+      // Too many fields, or something after the drift
+      throw invalid_argument("The cron is not formatted correctly.");
+   }
 
    #ifdef DEBUG
    cerr << "DEBUG Date::Cron("
@@ -1204,8 +1244,7 @@ const Date Date::Cron(const string& strIn, bool isISC) const
     ParseCronString(v_tokens[4],comboList[COMBO_DOW],
                     T_DOW_MIN,T_DOW_MAX,true)))
    {
-      // Invalid syntax; CronValid() is what reports it
-      return *this;
+      throw invalid_argument("The cron is not formatted correctly.");
    }
    // crontab(5) treats a day field starting with '*' as unrestricted
    return CronFromLists(comboList, true,
@@ -1223,7 +1262,12 @@ bool Date::ParseCronString(const string& strIn, set<int> &comboListOut,
    //   x-y/z        every z'th value from x to y
    //   */x (/x)     every value divisible by x, or with stepFromLowest
    //                every x'th value from the lowest one (crontab)
-   // Anything else (ie: '5-', 'x-y-z', '/x/y') is invalid.
+   // Anything else (ie: '5-', 'x-y-z', '/x/y', or an empty entry such as
+   // '5,,6') is invalid.
+   if (!strIn.empty() && (strIn[0] == ',' || strIn[strIn.size() - 1] == ',' ||
+                          strIn.find(",,") != string::npos))
+      return false;
+
    vector<string> tokens;
    Tokenize(strIn, ',', tokens);
 
@@ -1336,8 +1380,7 @@ unsigned long Date::BlockUntil(const Date& until)
    if (rc == EINTR)
    {
       // A signal woke us up early; report how long is left
-      time_t now = Now();
-      return (until.Time() > now) ? (unsigned long)(until.Time() - now) : 0;
+      return SecondsLeft(until.Time(), Now());
    }
    return 0;
 #else
@@ -1362,7 +1405,6 @@ unsigned long Date::BlockUntil(const Date& until)
    nanosleep(&rel, NULL);
 #endif
 
-   time_t after = Now();
-   return (until.Time() > after) ? (unsigned long)(until.Time() - after) : 0;
+   return SecondsLeft(until.Time(), Now());
 #endif
 }
