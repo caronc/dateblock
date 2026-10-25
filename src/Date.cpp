@@ -42,10 +42,6 @@
 #include <sys/time.h>
 #endif
 
-#ifdef DEBUG
-#include <iostream>
-#endif
-
 // The most values one field may expand to.  Time fields never get close
 // (a minute has 60 values); this stops a drift such as '0-2147483647' from
 // using up all of the memory.
@@ -148,6 +144,22 @@ namespace {
       unsigned long long left = (unsigned long long)until - (unsigned long long)now;
       const unsigned long most = numeric_limits<unsigned long>::max();
       return (left > most) ? most : (unsigned long)left;
+   }
+
+   // Splits 'strIn' at each 'delimiter', skipping empty pieces
+   void SplitList(const string& strIn, char delimiter, vector<string>& tokens)
+   {
+      size_t startPos = 0;
+      tokens.clear();
+      while (startPos <= strIn.size())
+      {
+         size_t nextPos = strIn.find(delimiter, startPos);
+         if (nextPos == string::npos)
+            nextPos = strIn.size();
+         if (nextPos > startPos)
+            tokens.push_back(strIn.substr(startPos, nextPos - startPos));
+         startPos = nextPos + 1;
+      }
    }
 
    // Splits a whitespace separated cron string into its fields.
@@ -1162,8 +1174,8 @@ time_t Date::NextTime(const set<int> lists[COMBO_COUNT], bool isISC,
 
    const time_t lowest = numeric_limits<time_t>::min();
    const time_t highest = numeric_limits<time_t>::max();
-   time_t best = 0;
-   bool found = false;
+   // There is always at least one drift (0 when none was given)
+   time_t best = highest;
    vector<time_t>::iterator end = drifts.end();
    while (end != drifts.begin())
    {
@@ -1178,11 +1190,8 @@ time_t Date::NextTime(const set<int> lists[COMBO_COUNT], bool isISC,
       if (match > highest - *use)
          throw runtime_error("The matching time is out of range.");
       time_t when = match + *use;
-      if (!found || when < best)
-      {
+      if (when < best)
          best = when;
-         found = true;
-      }
 
       // Nothing can be sooner than the very next second
       if (best == after + 1)
@@ -1209,30 +1218,11 @@ bool Date::CronValid(const string& sSecOffset,
                      const string& sDowOffset,
                      const string& sDriftOffset)
 {
-   // Calculate Possible Combinations
-   set<int> comboList[COMBO_COUNT]; // Build Combination List
-   return(
-         ParseCronString(
-            sSecOffset,
-            comboList[COMBO_SEC],T_SEC_MIN,T_SEC_MAX) &&
-         ParseCronString(
-            sMinOffset,
-            comboList[COMBO_MIN],T_MIN_MIN,T_MIN_MAX) &&
-         ParseCronString(
-            sHourOffset,
-            comboList[COMBO_HOUR],T_HOUR_MIN,T_HOUR_MAX) &&
-         ParseCronString(
-            sDomOffset,
-            comboList[COMBO_DOM],T_DOM_MIN,T_DOM_MAX) &&
-         ParseCronString(
-            sMonthOffset,
-            comboList[COMBO_MONTH],T_MONTH_MIN,T_MONTH_MAX) &&
-         ParseCronString(
-            sDowOffset,
-            comboList[COMBO_DOW],T_DOW_MIN,T_DOW_MAX) &&
-         ParseCronString(
-            sDriftOffset,
-            comboList[COMBO_DRIFT],T_DRIFT_MIN,T_DRIFT_MAX));
+   const string fields[COMBO_COUNT] = {
+      sSecOffset, sMinOffset, sHourOffset, sDomOffset,
+      sMonthOffset, sDowOffset, sDriftOffset };
+   set<int> comboList[COMBO_COUNT];
+   return ParseFields(fields, false, comboList);
 }
 
 //------------------------------------------------
@@ -1243,46 +1233,17 @@ bool Date::CronValid(const string& sSecOffset,
 //------------------------------------------------
 bool Date::CronValid(const string& strIn, bool isISC)
 {
-   //         Dateblock Format
-   //
-   //     +------------------------------ second (0 - 59)
-   //     |  +--------------------------- min (0 - 59)
-   //     |  |  +----------------------- hour (0 - 23)
-   //     |  |  |  +----------------- day of month (1 - 31)
-   //     |  |  |  |  +----------- month (1 - 12)
-   //     |  |  |  |  |  +----- day of week (0 - 6) (Sunday=0)
-   //     |  |  |  |  |  |  +- drift time (defaults to zero)
-   //     |  |  |  |  |  |  |
-   //     -  -  -  -  -  -  -
-   //     *  *  *  *  *  *  *
-   //
-   //         ISC Format (no second or drift)
-   //
-   //     +----------------------------- min (0 - 59)
-   //     |  +----------------------- hour (0 - 23)
-   //     |  |  +----------------- day of month (1 - 31)
-   //     |  |  |  +----------- month (1 - 12)
-   //     |  |  |  |  +----- day of week (0 - 6) (Sunday=0)
-   //     |  |  |  |  |
-   //     -  -  -  -  -
-   //     *  *  *  *  *
-
-   vector<string> v_tokens;
-   if (!SplitCronString(strIn, isISC, v_tokens))
+   set<int> comboList[COMBO_COUNT];
+   bool domStar, dowStar;
+   try
    {
-      // More entries then expected found
+      ParseCron(strIn, isISC, comboList, domStar, dowStar);
+   }
+   catch (const invalid_argument&)
+   {
       return false;
    }
-
-   // Convert to expected format
-   return isISC?
-         // Yes? Ok then skip the 'seconds' field (defaults to '*')
-         CronValid("*", v_tokens[0], v_tokens[1], v_tokens[2],
-                        v_tokens[3], v_tokens[4], "*"):
-         // No? Then handle all of the arguments
-         CronValid(v_tokens[0], v_tokens[1], v_tokens[2],
-                   v_tokens[3], v_tokens[4], v_tokens[5],
-                   v_tokens[6]);
+   return true;
 }
 
 //------------------------------------------------
@@ -1298,15 +1259,11 @@ const Date Date::Cron(const string& sSecOffset,
                       const string& sDowOffset,
                       const string& sDriftOffset) const
 {
-
+   const string fields[COMBO_COUNT] = {
+      sSecOffset, sMinOffset, sHourOffset, sDomOffset,
+      sMonthOffset, sDowOffset, sDriftOffset };
    set<int> comboList[COMBO_COUNT];
-   if (!(ParseCronString(sSecOffset,comboList[COMBO_SEC],T_SEC_MIN,T_SEC_MAX) &&
-    ParseCronString(sMinOffset,comboList[COMBO_MIN],T_MIN_MIN,T_MIN_MAX) &&
-    ParseCronString(sHourOffset,comboList[COMBO_HOUR],T_HOUR_MIN,T_HOUR_MAX) &&
-    ParseCronString(sDomOffset,comboList[COMBO_DOM],T_DOM_MIN,T_DOM_MAX) &&
-    ParseCronString(sMonthOffset,comboList[COMBO_MONTH],T_MONTH_MIN,T_MONTH_MAX) &&
-    ParseCronString(sDowOffset,comboList[COMBO_DOW],T_DOW_MIN,T_DOW_MAX) &&
-    ParseCronString(sDriftOffset,comboList[COMBO_DRIFT],T_DRIFT_MIN,T_DRIFT_MAX)))
+   if (!ParseFields(fields, false, comboList))
    {
       throw invalid_argument("The cron is not formatted correctly.");
    }
@@ -1320,30 +1277,6 @@ const Date Date::Cron(const string& sSecOffset,
 //------------------------------------------------
 const Date Date::Cron(const string& strIn, bool isISC) const
 {
-   //         Normal Format
-   //
-   //     +------------------------------ second (0 - 59)
-   //     |  +--------------------------- min (0 - 59)
-   //     |  |  +----------------------- hour (0 - 23)
-   //     |  |  |  +----------------- day of month (1 - 31)
-   //     |  |  |  |  +----------- month (1 - 12)
-   //     |  |  |  |  |  +----- day of week (0 - 6) (Sunday=0)
-   //     |  |  |  |  |  |  +- drift time (defaults to zero)
-   //     |  |  |  |  |  |  |
-   //     -  -  -  -  -  -  -
-   //     *  *  *  *  *  *  *
-   //
-   //         ISC Format (no second)
-   //
-   //     +----------------------------- min (0 - 59)
-   //     |  +----------------------- hour (0 - 23)
-   //     |  |  +----------------- day of month (1 - 31)
-   //     |  |  |  +----------- month (1 - 12)
-   //     |  |  |  |  +----- day of week (0 - 6) (Sunday=0)
-   //     |  |  |  |  |
-   //     -  -  -  -  -
-   //     *  *  *  *  *
-
    set<int> comboList[COMBO_COUNT];
    bool domStar, dowStar;
    ParseCron(strIn, isISC, comboList, domStar, dowStar);
@@ -1373,6 +1306,29 @@ void Date::ParseCron(const string& strIn, bool isISC,
                      set<int> comboList[COMBO_COUNT],
                      bool& domStar, bool& dowStar)
 {
+   //         Dateblock Format
+   //
+   //     +------------------------------ second (0 - 59)
+   //     |  +--------------------------- min (0 - 59)
+   //     |  |  +----------------------- hour (0 - 23)
+   //     |  |  |  +----------------- day of month (1 - 31)
+   //     |  |  |  |  +----------- month (1 - 12)
+   //     |  |  |  |  |  +----- day of week (0 - 6) (Sunday=0)
+   //     |  |  |  |  |  |  +- drift time (defaults to zero)
+   //     |  |  |  |  |  |  |
+   //     -  -  -  -  -  -  -
+   //     *  *  *  *  *  *  *
+   //
+   //         ISC Format (no second or drift)
+   //
+   //     +----------------------------- min (0 - 59)
+   //     |  +----------------------- hour (0 - 23)
+   //     |  |  +----------------- day of month (1 - 31)
+   //     |  |  |  +----------- month (1 - 12)
+   //     |  |  |  |  +----- day of week (0 - 6) (Sunday=0)
+   //     |  |  |  |  |
+   //     -  -  -  -  -
+   //     *  *  *  *  *
    vector<string> v_tokens;
    if (!SplitCronString(strIn, isISC, v_tokens))
    {
@@ -1380,53 +1336,47 @@ void Date::ParseCron(const string& strIn, bool isISC,
       throw invalid_argument("The cron is not formatted correctly.");
    }
 
-   #ifdef DEBUG
-   cerr << "DEBUG Date::Cron("
-      << v_tokens[0] << ","
-      << v_tokens[1] << ","
-      << v_tokens[2] << ","
-      << v_tokens[3] << ","
-      << v_tokens[4] << ","
-      << v_tokens[5] << ","
-      << v_tokens[6] << "),"
-      << " ISC=" << ((string) (isISC?"y":"n"))
-      << endl;
-   #endif
-
    if (!isISC)
    {
-      const int lows[COMBO_COUNT] = {
-         T_SEC_MIN, T_MIN_MIN, T_HOUR_MIN, T_DOM_MIN,
-         T_MONTH_MIN, T_DOW_MIN, T_DRIFT_MIN };
-      const int highs[COMBO_COUNT] = {
-         T_SEC_MAX, T_MIN_MAX, T_HOUR_MAX, T_DOM_MAX,
-         T_MONTH_MAX, T_DOW_MAX, T_DRIFT_MAX };
-      for (int i = 0; i < COMBO_COUNT; i++)
-         if (!ParseCronString(v_tokens[i], comboList[i], lows[i], highs[i]))
-            throw invalid_argument("The cron is not formatted correctly.");
+      if (!ParseFields(&v_tokens[0], false, comboList))
+         throw invalid_argument("The cron is not formatted correctly.");
       domStar = dowStar = true;
       return;
    }
 
-   // ISC: no seconds or drift field
-   comboList[COMBO_SEC].insert(T_NO_ENTRY);
-   comboList[COMBO_DRIFT].insert(T_NO_ENTRY);
-   if (!(ParseCronString(v_tokens[0],comboList[COMBO_MIN],
-                    T_MIN_MIN,T_MIN_MAX,true) &&
-    ParseCronString(v_tokens[1],comboList[COMBO_HOUR],
-                    T_HOUR_MIN,T_HOUR_MAX,true) &&
-    ParseCronString(v_tokens[2],comboList[COMBO_DOM],
-                    T_DOM_MIN,T_DOM_MAX,true) &&
-    ParseCronString(v_tokens[3],comboList[COMBO_MONTH],
-                    T_MONTH_MIN,T_MONTH_MAX,true) &&
-    ParseCronString(v_tokens[4],comboList[COMBO_DOW],
-                    T_DOW_MIN,T_DOW_MAX,true)))
-   {
+   // ISC has no seconds or drift field ('*' means not given)
+   const string fields[COMBO_COUNT] = {
+      "*", v_tokens[0], v_tokens[1], v_tokens[2], v_tokens[3], v_tokens[4],
+      "*" };
+   if (!ParseFields(fields, true, comboList))
       throw invalid_argument("The cron is not formatted correctly.");
-   }
+
    // crontab(5) treats a day field starting with '*' as unrestricted
    domStar = (v_tokens[2][0] == '*');
    dowStar = (v_tokens[4][0] == '*');
+}
+
+//------------------------------------------------
+//
+//  Function: ParseFields
+//
+//------------------------------------------------
+bool Date::ParseFields(const string fields[COMBO_COUNT], bool stepFromLowest,
+                       set<int> comboList[COMBO_COUNT])
+{
+   const int lows[COMBO_COUNT] = {
+      T_SEC_MIN, T_MIN_MIN, T_HOUR_MIN, T_DOM_MIN,
+      T_MONTH_MIN, T_DOW_MIN, T_DRIFT_MIN };
+   const int highs[COMBO_COUNT] = {
+      T_SEC_MAX, T_MIN_MAX, T_HOUR_MAX, T_DOM_MAX,
+      T_MONTH_MAX, T_DOW_MAX, T_DRIFT_MAX };
+   for (int i = 0; i < COMBO_COUNT; i++)
+   {
+      if (!ParseCronString(fields[i], comboList[i], lows[i], highs[i],
+                           stepFromLowest))
+         return false;
+   }
+   return true;
 }
 
 bool Date::ParseCronString(const string& strIn, set<int> &comboListOut,
@@ -1453,7 +1403,7 @@ bool Date::ParseCronString(const string& strIn, set<int> &comboListOut,
       return false;
 
    vector<string> tokens;
-   Tokenize(strIn, ',', tokens);
+   SplitList(strIn, ',', tokens);
    if (tokens.size() > 1 && find(tokens.begin(), tokens.end(), "*") != tokens.end())
       return false;
 
@@ -1519,30 +1469,6 @@ bool Date::ParseCronString(const string& strIn, set<int> &comboListOut,
    if (comboListOut.empty())
       comboListOut.insert(T_NO_ENTRY);
    return true;
-}
-
-size_t Date::Tokenize(const string& strIn,
-                char delimiter,
-                vector<string> &tokens)
-{
-   size_t startPos = 0;
-   tokens.clear();
-   while (startPos <= strIn.size())
-   {
-      size_t nextPos = strIn.find(delimiter, startPos);
-      if (nextPos == string::npos)  // Last token
-         nextPos = strIn.size();
-
-      if (nextPos > startPos)
-      {
-         string token(strIn, startPos, nextPos - startPos);
-         tokens.insert(tokens.end(), token);
-      }
-
-      // + 1 because it is the size of the seperator (,)
-      startPos = nextPos + 1;
-   }
-   return tokens.size();
 }
 
 //------------------------------------------------

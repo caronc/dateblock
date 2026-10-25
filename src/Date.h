@@ -270,15 +270,17 @@ class Date
          COMBO_COUNT
       };
 
-     // Internal Tool
-     static size_t Tokenize(const std::string& strIn, char delimiter,
-                            std::vector<std::string> &tokensOut);
-
      // stepFromLowest: '*/x' counts from minVal (crontab) instead of 0
      static bool ParseCronString(const std::string& strIn,
                                  std::set<int> &comboListOut,
                                  int minVal, int maxVal,
                                  bool stepFromLowest = false);
+
+     // Parses each field (seconds to drift) into its list; false if any
+     // of them is not formatted correctly
+     static bool ParseFields(const std::string fields[COMBO_COUNT],
+                             bool stepFromLowest,
+                             std::set<int> lists[COMBO_COUNT]);
 
      // Splits and parses a whole cron string into its field lists.
      // Throws std::invalid_argument if it is not formatted correctly.

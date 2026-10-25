@@ -20,17 +20,12 @@
 #define _DATEBLOCK_H_
 
 #define  AUTHOR       "Chris Caron <lead2gold@gmail.com>"
-#define  ONEMIN       60
-#define  ONEHOUR      3600
-#define  ONEDAY       86400
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
 #endif
 
 #include "Date.h"
-
-using namespace std;
 
 /// ProgramDetails displays help information
 void ProgramDetails();

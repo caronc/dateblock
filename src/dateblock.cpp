@@ -21,7 +21,6 @@
 #endif
 
 #include <iostream>
-#include <sstream>
 #include <string>
 #include <stdexcept>
 #include <stdlib.h>
@@ -190,6 +189,8 @@ int main(int argc, char **argv)
    string sDowOffset="*";
    string sDriftOffset="*";
    string sCronStr="";
+   string sShown;     // the schedule as typed, for error messages
+   bool useISC = false;
 
    // Declare the supported options.
    po::options_description poAllOptions("Allowed options");
@@ -312,90 +313,49 @@ int main(int argc, char **argv)
          sDriftOffset = poVariablesMap["drift"].as<string>();
       }
 
-      // cout << "Executing Cron("
-      //   << sSecOffset
-      //   << "," << sMinOffset
-      //   << "," << sHourOffset
-      //   << "," << sDomOffset
-      //   << "," << sMonthOffset
-      //   << "," << sDowOffset << ");" << endl;
-      try
-      {
-         if(!Date::CronValid(sSecOffset,
-                               sMinOffset,
-                               sHourOffset,
-                               sDomOffset,
-                               sMonthOffset,
-                               sDowOffset,
-                               sDriftOffset))
-         {
-            cerr << "Error: Syntax Invalid : '"
-               << sSecOffset
-               << " " << sMinOffset
-               << " " << sHourOffset
-               << " " << sDomOffset
-               << " " << sMonthOffset
-               << " " << sDowOffset
-               << " " << sDriftOffset
-               << "'" << endl;
-               ProgramExamples();
-            return 1;
-         }
-
-         dObjFinish = dObjStart.Cron(sSecOffset,
-                        sMinOffset,
-                        sHourOffset,
-                        sDomOffset,
-                        sMonthOffset,
-                        sDowOffset,
-                        sDriftOffset);
-      }
-      catch (const runtime_error& e)
-      {
-         cerr << "Error: No matching date/time could be found: "
-              << e.what() << endl;
-         return 1;
-      }
-      catch (const exception& e)
-      {
-         cerr << "Error: " << e.what() << endl;
-         return 1;
-      }
+      sShown = sSecOffset + " " + sMinOffset + " " + sHourOffset + " " +
+               sDomOffset + " " + sMonthOffset + " " + sDowOffset + " " +
+               sDriftOffset;
    }
    else
    {
-      // ISC Format
-      bool useISC = (poVariablesMap.count("isc") > 0);
-
-      // Parse the old school cron format
+      // The whole schedule as one string (a regular crontab entry with
+      // --isc)
+      useISC = (poVariablesMap.count("isc") > 0);
       sCronStr = poVariablesMap["cron"].as<string>();
-      //cout << "Executing Cron(\""
-      //     << sCronStr << "\");" << endl;
-      try
-      {
-         if(!Date::CronValid(sCronStr, useISC))
-         {
-            cerr << "Error: Syntax Invalid : '"
-               << sCronStr << "'" << endl;
-               ProgramExamples();
-            return 1;
-         }
-
-         dObjFinish = dObjStart.Cron(sCronStr, useISC);
-      }
-      catch (const runtime_error& e)
-      {
-         cerr << "Error: No matching date/time could be found: "
-              << e.what() << endl;
-         return 1;
-      }
-      catch (const exception& e)
-      {
-         cerr << "Error: " << e.what() << endl;
-         return 1;
-      }
+      sShown = sCronStr;
    }
 
+   try
+   {
+      if (poVariablesMap.count("cron"))
+      {
+         dObjFinish = dObjStart.Cron(sCronStr, useISC);
+      }
+      else
+      {
+         dObjFinish = dObjStart.Cron(sSecOffset, sMinOffset, sHourOffset,
+                                     sDomOffset, sMonthOffset, sDowOffset,
+                                     sDriftOffset);
+      }
+   }
+   catch (const invalid_argument&)
+   {
+      cerr << "Error: Syntax Invalid : '" << sShown << "'" << endl;
+      ProgramExamples();
+      return 1;
+   }
+   catch (const runtime_error& e)
+   {
+      cerr << "Error: No matching date/time could be found: "
+           << e.what() << endl;
+      return 1;
+   }
+   catch (const exception& e)
+   {
+      cerr << "Error: " << e.what() << endl;
+      return 1;
+   }
 
    if (poVariablesMap.count("verbose") || poVariablesMap.count("test"))
    {
