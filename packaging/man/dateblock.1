@@ -4,9 +4,9 @@
 .SH "NAME"
 \fBdateblock\fR \- block (sleep) until a cron\-style moment in time
 .SH "SYNOPSIS"
-\fBdateblock\fR [\fB\-t\fR] [\fB\-v\fR] [\fB\-z\fR \fIZONE\fR] \fB\-c\fR \fICRON\fR [\fB\-i\fR]
+\fBdateblock\fR [\fB\-t\fR] [\fB\-v\fR] [\fB\-z\fR \fIZONE\fR] \fB\-c\fR \fICRON\fR [\fB\-i\fR] [[\fB\-\-\fR] \fICOMMAND\fR [\fIARGUMENTS\fR\|\.\|\.\|\.]]
 .br
-\fBdateblock\fR [\fB\-t\fR] [\fB\-v\fR] [\fB\-z\fR \fIZONE\fR] [\fB\-s\fR \fISEC\fR] [\fB\-n\fR \fIMIN\fR] [\fB\-o\fR \fIHOUR\fR] [\fB\-d\fR \fIDOM\fR] [\fB\-m\fR \fIMONTH\fR] [\fB\-w\fR \fIDOW\fR] [\fB\-x\fR \fIDRIFT\fR]
+\fBdateblock\fR [\fB\-t\fR] [\fB\-v\fR] [\fB\-z\fR \fIZONE\fR] [\fB\-s\fR \fISEC\fR] [\fB\-n\fR \fIMIN\fR] [\fB\-o\fR \fIHOUR\fR] [\fB\-d\fR \fIDOM\fR] [\fB\-m\fR \fIMONTH\fR] [\fB\-w\fR \fIDOW\fR] [\fB\-x\fR \fIDRIFT\fR] [[\fB\-\-\fR] \fICOMMAND\fR [\fIARGUMENTS\fR\|\.\|\.\|\.]]
 .br
 \fBdateblock\fR \fB\-h\fR
 .SH "DESCRIPTION"
@@ -20,6 +20,8 @@ match on a specific \fIsecond\fR (not just a minute)\.
 .IP "" 0
 .P
 Use \fB\-\-test\fR to see when \fBdateblock\fR would unblock without waiting\.
+.P
+Given a \fICOMMAND\fR, \fBdateblock\fR runs it once the time is reached and exits with the command's exit code; see \fIRUNNING A COMMAND\fR\.
 .SH "OPTIONS"
 \fB\-h\fR, \fB\-\-help\fR: Show the help screen (with examples) and exit\.
 .P
@@ -113,6 +115,20 @@ When both day fields are restricted (neither starts with \fB*\fR), \fIeither\fR 
 .IP "\(bu" 4
 \fB*/x\fR counts from the field's lowest value, so a day of month of \fB*/5\fR is the 1st, 6th, 11th and so on (without \fB\-\-isc\fR it is the 5th, 10th, 15th and so on)\.
 .IP "" 0
+.SH "RUNNING A COMMAND"
+Anything after the options is a command for \fBdateblock\fR to run once the time is reached:
+.IP "" 4
+.nf
+$ dateblock \-n /15 \-\- \./backup\.sh \-\-full
+.fi
+.IP "" 0
+.IP "\(bu" 4
+\fBdateblock\fR \fIbecomes\fR the command (with execvp(3), the way nice(1) and timeout(1) do), so the exit code, signals and output are all the command's own\.
+.IP "\(bu" 4
+The command starts at \fB\-\-\fR, or at the first argument that is not one of \fBdateblock\fR's options (or an option's value)\. Everything from there on is passed to the command exactly as given, without a shell, so \fBdateblock \-n 5 ls \-l\fR runs \fBls \-l\fR\. Use \fB\-\-\fR when the command itself starts with a dash\.
+.IP "\(bu" 4
+With \fB\-\-test\fR the command is shown (on the \fBCommand\fR line) but not run\. If the schedule is invalid or impossible the command is never run\.
+.IP "" 0
 .SH "TIMEZONES"
 The schedule is read in this computer's timezone (the \fBTZ\fR environment variable, or the system setting), unless \fB\-\-timezone\fR names another one\.
 .IP "\(bu" 4
@@ -199,13 +215,21 @@ Block Until  : 2026\-10\-25 02:30:00 (Sun)
 .fi
 .IP "" 0
 .P
-Run a command every 15 minutes, on the quarter hour:
+Run a backup at the next quarter hour; the exit code is the backup's:
+.IP "" 4
+.nf
+$ dateblock \-n /15 \-\- \./backup\.sh \-\-full
+.fi
+.IP "" 0
+.P
+Run it every 15 minutes, on the quarter hour:
 .IP "" 4
 .nf
 $ while dateblock \-n /15; do \./backup\.sh; done
 .fi
 .IP "" 0
 .SH "EXIT STATUS"
+With a \fICOMMAND\fR, \fBdateblock\fR exits with the command's own exit code once it has run\. Otherwise, or if the command never got to run:
 .TP
 \fB0\fR
 The matching time was reached (or, with \fB\-\-test\fR, was worked out)\.
@@ -213,12 +237,18 @@ The matching time was reached (or, with \fB\-\-test\fR, was worked out)\.
 \fB1\fR
 No options were given, the schedule is not valid, the \fB\-\-timezone\fR is unknown, or no matching time exists (such as the 31st of February)\. A schedule counts as impossible when nothing matches within the next 400 years, the length of time it takes the calendar to repeat itself\.
 .TP
+\fB126\fR
+The \fICOMMAND\fR was found but could not be run (ie: it is not executable)\.
+.TP
+\fB127\fR
+The \fICOMMAND\fR could not be found\.
+.TP
 \fB255\fR
 The command line could not be parsed\.
 .P
 If \fBdateblock\fR is killed before the time is reached (ie: with Ctrl\-C), it exits with the usual status for that signal\.
 .SH "SEE ALSO"
-sleep(1), crontab(5), date(1)
+sleep(1), crontab(5), date(1), nice(1), timeout(1), execvp(3)
 .SH "AUTHOR"
 Chris Caron <lead2gold@gmail\.com>
 .SH "BUGS"

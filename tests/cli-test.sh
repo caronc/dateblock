@@ -35,6 +35,36 @@ fi
 "$DATEBLOCK" -t -c '0 *,5' >/dev/null 2>&1
 [ $? -eq 1 ] || fail "dateblock accepted '*,5'"
 
+# A command after the options runs once the time is reached, and its exit
+# code is dateblock's
+"$DATEBLOCK" -s /1 -- sh -c 'exit 7'
+[ $? -eq 7 ] || fail "the command's exit code was not passed on"
+
+# Arguments arrive exactly as given (no shell), and options after the
+# command belong to it
+out=$("$DATEBLOCK" -s /1 printf '%s|' 'a b' -n '*' '$HOME')
+[ "$out" = 'a b|-n|*|$HOME|' ] || fail "command arguments were changed: $out"
+out=$("$DATEBLOCK" -s/1 echo -n 5)
+[ "$out" = "5" ] || fail "options after the command were not left to it: $out"
+out=$("$DATEBLOCK" --second /1 -- echo -t)
+[ "$out" = "-t" ] || fail "'--' did not end dateblock's options: $out"
+
+# A command that can't be found (127) or run (126)
+"$DATEBLOCK" -s /1 no-such-command-dateblock 2>/dev/null
+[ $? -eq 127 ] || fail "a missing command did not exit with 127"
+tmp=$(mktemp)
+"$DATEBLOCK" -s /1 "$tmp" 2>/dev/null
+[ $? -eq 126 ] || fail "a command that can't be run did not exit with 126"
+
+# --test shows the command without running it, and a bad schedule never
+# runs it
+out=$("$DATEBLOCK" -t -n 5 -- touch "$tmp.ran")
+[ ! -e "$tmp.ran" ] || fail "--test ran the command"
+echo "$out" | grep -q '^Command      : touch ' || fail "--test did not show the command: $out"
+"$DATEBLOCK" -c '* 99' touch "$tmp.ran" 2>/dev/null
+[ $? -eq 1 ] && [ ! -e "$tmp.ran" ] || fail "a bad schedule ran the command"
+rm -f "$tmp" "$tmp.ran"
+
 # Blocking returns once the next whole second arrives
 start=$(date +%s)
 "$DATEBLOCK" -s '/1' || fail "dateblock -s /1 exited with an error"

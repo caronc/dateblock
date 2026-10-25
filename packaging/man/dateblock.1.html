@@ -59,6 +59,7 @@
     <a href="#OPTIONS">OPTIONS</a>
     <a href="#FIELD-SYNTAX">FIELD SYNTAX</a>
     <a href="#CRON-STRING">CRON STRING</a>
+    <a href="#RUNNING-A-COMMAND">RUNNING A COMMAND</a>
     <a href="#TIMEZONES">TIMEZONES</a>
     <a href="#DRIFTING">DRIFTING</a>
     <a href="#EXAMPLES">EXAMPLES</a>
@@ -84,8 +85,8 @@
 </p>
 <h2 id="SYNOPSIS">SYNOPSIS</h2>
 
-<p><code>dateblock</code> [<code>-t</code>] [<code>-v</code>] [<code>-z</code> <var>ZONE</var>] <code>-c</code> <var>CRON</var> [<code>-i</code>]<br>
-<code>dateblock</code> [<code>-t</code>] [<code>-v</code>] [<code>-z</code> <var>ZONE</var>] [<code>-s</code> <var>SEC</var>] [<code>-n</code> <var>MIN</var>] [<code>-o</code> <var>HOUR</var>] [<code>-d</code> <var>DOM</var>] [<code>-m</code> <var>MONTH</var>] [<code>-w</code> <var>DOW</var>] [<code>-x</code> <var>DRIFT</var>]<br>
+<p><code>dateblock</code> [<code>-t</code>] [<code>-v</code>] [<code>-z</code> <var>ZONE</var>] <code>-c</code> <var>CRON</var> [<code>-i</code>] [[<code>--</code>] <var>COMMAND</var> [<var>ARGUMENTS</var>...]]<br>
+<code>dateblock</code> [<code>-t</code>] [<code>-v</code>] [<code>-z</code> <var>ZONE</var>] [<code>-s</code> <var>SEC</var>] [<code>-n</code> <var>MIN</var>] [<code>-o</code> <var>HOUR</var>] [<code>-d</code> <var>DOM</var>] [<code>-m</code> <var>MONTH</var>] [<code>-w</code> <var>DOW</var>] [<code>-x</code> <var>DRIFT</var>] [[<code>--</code>] <var>COMMAND</var> [<var>ARGUMENTS</var>...]]<br>
 <code>dateblock</code> <code>-h</code></p>
 
 <h2 id="DESCRIPTION">DESCRIPTION</h2>
@@ -105,6 +106,9 @@ foreground: it returns the moment the schedule is next matched.</p>
 </ul>
 
 <p>Use <code>--test</code> to see when <strong>dateblock</strong> would unblock without waiting.</p>
+
+<p>Given a <var>COMMAND</var>, <strong>dateblock</strong> runs it once the time is reached and exits
+with the command's exit code; see <a href="#RUNNING-A-COMMAND" title="RUNNING A COMMAND" data-bare-link="true">RUNNING A COMMAND</a>.</p>
 
 <h2 id="OPTIONS">OPTIONS</h2>
 
@@ -236,6 +240,29 @@ is the 1st, 6th, 11th and so on (without <code>--isc</code> it is the 5th, 10th,
 15th and so on).</li>
 </ul>
 
+<h2 id="RUNNING-A-COMMAND">RUNNING A COMMAND</h2>
+
+<p>Anything after the options is a command for <strong>dateblock</strong> to run once the
+time is reached:</p>
+
+<pre><code>$ dateblock -n /15 -- ./backup.sh --full
+</code></pre>
+
+<ul>
+  <li>
+<strong>dateblock</strong> <em>becomes</em> the command (with <span class="man-ref">execvp<span class="s">(3)</span></span>, the way <span class="man-ref">nice<span class="s">(1)</span></span>
+and <span class="man-ref">timeout<span class="s">(1)</span></span> do), so the exit code, signals and output are all the
+command's own.</li>
+  <li>The command starts at <code>--</code>, or at the first argument that is not one
+of <strong>dateblock</strong>'s options (or an option's value). Everything from
+there on is passed to the command exactly as given, without a shell,
+so <code>dateblock -n 5 ls -l</code> runs <code>ls -l</code>. Use <code>--</code> when the command
+itself starts with a dash.</li>
+  <li>With <code>--test</code> the command is shown (on the <code>Command</code> line) but not
+run. If the schedule is invalid or impossible the command is never
+run.</li>
+</ul>
+
 <h2 id="TIMEZONES">TIMEZONES</h2>
 
 <p>The schedule is read in this computer's timezone (the <code>TZ</code> environment
@@ -323,21 +350,34 @@ Current Time : 2026-10-24 13:05:00 (Sat)
 Block Until  : 2026-10-25 02:30:00 (Sun)
 </code></pre>
 
-<p>Run a command every 15 minutes, on the quarter hour:</p>
+<p>Run a backup at the next quarter hour; the exit code is the backup's:</p>
+
+<pre><code>$ dateblock -n /15 -- ./backup.sh --full
+</code></pre>
+
+<p>Run it every 15 minutes, on the quarter hour:</p>
 
 <pre><code>$ while dateblock -n /15; do ./backup.sh; done
 </code></pre>
 
 <h2 id="EXIT-STATUS">EXIT STATUS</h2>
 
+<p>With a <var>COMMAND</var>, <strong>dateblock</strong> exits with the command's own exit code
+once it has run. Otherwise, or if the command never got to run:</p>
+
 <dl>
 <dt><code>0</code></dt>
 <dd>The matching time was reached (or, with <code>--test</code>, was worked out).</dd>
 <dt><code>1</code></dt>
 <dd>No options were given, the schedule is not valid, the <code>--timezone</code> is
-unknown, or no matching time exists (such as the 31st of February). A schedule counts as impossible
-when nothing matches within the next 400 years, the length of time it
-takes the calendar to repeat itself.</dd>
+unknown, or no matching time exists (such as the 31st of February). A
+schedule counts as impossible when nothing matches within the next 400
+years, the length of time it takes the calendar to repeat itself.</dd>
+<dt><code>126</code></dt>
+<dd>The <var>COMMAND</var> was found but could not be run (ie: it is not
+executable).</dd>
+<dt><code>127</code></dt>
+<dd>The <var>COMMAND</var> could not be found.</dd>
 <dt><code>255</code></dt>
 <dd>The command line could not be parsed.</dd>
 </dl>
@@ -347,7 +387,7 @@ exits with the usual status for that signal.</p>
 
 <h2 id="SEE-ALSO">SEE ALSO</h2>
 
-<p><span class="man-ref">sleep<span class="s">(1)</span></span>, <span class="man-ref">crontab<span class="s">(5)</span></span>, <span class="man-ref">date<span class="s">(1)</span></span></p>
+<p><span class="man-ref">sleep<span class="s">(1)</span></span>, <span class="man-ref">crontab<span class="s">(5)</span></span>, <span class="man-ref">date<span class="s">(1)</span></span>, <span class="man-ref">nice<span class="s">(1)</span></span>, <span class="man-ref">timeout<span class="s">(1)</span></span>, <span class="man-ref">execvp<span class="s">(3)</span></span></p>
 
 <h2 id="AUTHOR">AUTHOR</h2>
 

@@ -17,25 +17,29 @@ Python bindings are additionally included supporting all of the standard datetim
 formats and objects!
 
 ## Quick Start
+The `dateblock` command is a C++ tool; install it from the distribution
+packages or build it from source (see [Installation](#installation)).
 ```bash
-# Install the dateblock command and Python module (Linux, macOS and Windows)
-pip install dateblock
-
-# ...or just the command, with uv
-uv tool install dateblock
-
 # When would the next 5th minute start?  (--test shows without waiting)
 dateblock -t -n /5
 
 # Wait for 9:00 in Tokyo, whatever timezone this computer is in
 dateblock -z Asia/Tokyo -c "0 0 9"
+
+# Run a backup at the next quarter hour (dateblock exits with its exit code)
+dateblock -n /15 -- ./backup.sh --full
+```
+
+The Python library is on PyPI (Linux, macOS and Windows):
+```bash
+pip install dateblock
 ```
 
 Packages for Fedora, RHEL/CentOS/Alma/Rocky 9 and 10, Debian and Arch Linux
 can be built from this repository; see [Installation](#installation).
 
 __Syntax__:
-dateblock [options]
+dateblock [options] [--] [command [arguments...]]
 
 __Allowed options__:
 ```
@@ -53,6 +57,9 @@ __Allowed options__:
   -x [ --drift ] arg    Additional drift time (in seconds).
   -z [ --timezone ] arg Timezone to read the schedule in (ie:
                         America/Toronto); defaults to this computer's.
+
+  Anything after the options (or after --) is a command to run once the
+  time is reached.
 ```
 
 A variety of syntax is accepted by this tool such as:
@@ -120,6 +127,28 @@ is. The times shown by __--test__ and __--verbose__ are in that timezone too.
 dateblock -t -z Asia/Tokyo -c "0 0 9"
 Current Time : 2026-10-24 22:05:00 JST (Sat)
 Block Until  : 2026-10-25 09:00:00 JST (Sun)
+```
+
+### Running a command:
+Put a command (and its arguments) after the options, and dateblock runs it
+once the time is reached:
+```bash
+dateblock -n /15 -- ./backup.sh --full
+dateblock -i -c "0 9 * * 1-5" notify-send "Stand-up"
+```
+- dateblock _becomes_ the command (the way `nice` and `timeout` do), so the
+  exit code, signals and output are all the command's own.
+- The command starts at `--`, or at the first argument that isn't one of
+  dateblock's options; everything after that is passed to the command as
+  is (no shell is involved), so `dateblock -n 5 ls -l` runs `ls -l`.
+- With __--test__ (__-t__) the command is only shown, not run.
+- If the schedule is invalid the command is never run (exit code 1). A
+  command that can't be found exits with 127, and one that can't be run
+  with 126 (just like a shell).
+
+To run it again and again, put dateblock in a loop:
+```bash
+while dateblock -n /15; do ./backup.sh; done
 ```
 
 ### Drifting:
@@ -278,12 +307,14 @@ A few things worth knowing:
   (`KeyboardInterrupt`) works as expected.
 
 ## Installation
-### From PyPI
+### From PyPI (the Python library)
 ```bash
 pip install dateblock
 ```
-This gives you the `dateblock` command and the Python module on Linux, macOS
-and Windows. The command takes the same options as described above.
+This gives you the Python library on Linux, macOS and Windows (the C++ code
+is compiled straight into it, so nothing else is needed). The `dateblock`
+command is the C++ tool; install it from the packages or build it from
+source as shown below.
 
 ### From Source
 Assuming you have a C++ compiler, the Boost `program_options` library and

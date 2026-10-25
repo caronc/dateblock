@@ -25,8 +25,7 @@
 #   RPM, Debian and Arch packages do).  Run ./configure && make first; or
 #   point CPPFLAGS/LDFLAGS at an installed copy, ie:
 #     CPPFLAGS="$(pkg-config --cflags dateblock)"
-#   The 'dateblock' command is left out in this mode because the C++ tool
-#   already provides it.
+# - This is only the Python library; the dateblock command is the C++ tool.
 # - The version comes from configure.ac (AC_INIT).
 import os
 import re
@@ -54,7 +53,6 @@ if SHARED:
         library_dirs=[os.path.join("src", ".libs")],
         libraries=["dateblock"],
     )
-    entry_points = {}
 else:
     extension = Extension(
         "dateblock._dateblock",
@@ -63,7 +61,6 @@ else:
         # MSVC needs to be told to use standard C++ exception handling
         extra_compile_args=["/EHsc"] if sys.platform == "win32" else [],
     )
-    entry_points = {"console_scripts": ["dateblock = dateblock.cli:main"]}
 
 setup(
     name="dateblock",
@@ -85,10 +82,8 @@ setup(
     package_dir={"": "python"},
     packages=["dateblock"],
     ext_modules=[extension],
-    entry_points=entry_points,
     classifiers=[
         "Development Status :: 5 - Production/Stable",
-        "Environment :: Console",
         "Intended Audience :: Developers",
         "Intended Audience :: System Administrators",
         "Natural Language :: English",

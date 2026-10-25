@@ -83,8 +83,9 @@ On a machine running the matching distribution:
 ## PyPI (pip install dateblock)
 The Python package is built from `pyproject.toml` and `setup.py` at the top
 of the source tree. The PyPI wheels have the C++ code compiled straight into
-the Python module, so they need nothing else installed, and they include the
-`dateblock` command.
+the Python module, so they need nothing else installed.  They hold only the
+Python library; the `dateblock` command is the C++ tool (built from source
+or installed from the distribution packages).
 
 Build the source package and the Linux wheels (manylinux and musllinux,
 Python 3.9 to 3.14) with:

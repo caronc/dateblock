@@ -23,8 +23,12 @@
 #include <iostream>
 #include <string>
 #include <stdexcept>
+#include <vector>
+#include <errno.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <boost/program_options.hpp>
 #include "Date.h"
@@ -51,8 +55,11 @@ void ProgramDetails()
         << "system 'until' a specific time. Dateblock could be compared" << endl
         << "to how a cron works with its crontab definitions." << endl
         << "Dateblock will block until a specified criteria is met." << endl
+        << "Give it a command (and its arguments) after the options, and" << endl
+        << "dateblock runs it once the time is reached, exiting with the" << endl
+        << "command's own exit code." << endl << endl
         << "Syntax: "
-        << "dateblock [options]" << endl << endl;
+        << "dateblock [options] [--] [command [arguments...]]" << endl << endl;
 }
 
 void ProgramExamples()
@@ -143,6 +150,11 @@ void ProgramExamples()
      << endl << "    computer is in (daylight saving follows that timezone)."
      << endl << endl;
 
+   cerr << "$> dateblock -n /15 -- ./backup.sh --full" << endl
+     << "    This would block until the next quarter hour, and then run"
+     << endl << "    './backup.sh --full' (exiting with its exit code)."
+     << endl << endl;
+
    cerr << "$> dateblock -o /5 -d 1-14,20" << endl
      << "    This would block until a hour divisible by 5 was reached on"
      << " the first half" << endl << "     of the month as well as the"
@@ -175,8 +187,91 @@ static bool KnownTimeZone(const string& name)
    return false;
 }
 
+// Where the command to run (if any) starts in argv: at '--', or at the
+// first argument that isn't one of our options or an option's value.
+// Everything from there on belongs to the command (like sudo or nice), so
+// its own options (ie: ls -l) are never taken for ours.  Returns argc if
+// there is no command.
+static int CommandStart(int argc, char **argv)
+{
+   // Short options that take a value, and the long names
+   const string valueShort = "snodmwcxz";
+   const char *valueLong[] = {"second", "minute", "hour", "dom", "month",
+                              "dow", "cron", "drift", "timezone"};
+   const char *flagLong[] = {"help", "test", "verbose", "isc"};
+   const unsigned values = sizeof(valueLong)/sizeof(valueLong[0]);
+   const unsigned flags = sizeof(flagLong)/sizeof(flagLong[0]);
+
+   for (int i = 1; i < argc; i++)
+   {
+      string arg = argv[i];
+      if (arg == "--" || arg.size() < 2 || arg[0] != '-')
+      {
+         return i;
+      }
+
+      if (arg[1] == '-')
+      {
+         // --name or --name=value.  A name may be shortened (--min), the
+         // same way the option parser allows.
+         if (arg.find('=') != string::npos)
+         {
+            continue;
+         }
+         string name = arg.substr(2);
+         bool exact = false, takesValue = false;
+         unsigned matches = 0;
+         for (unsigned v = 0; v < values + flags; v++)
+         {
+            string option = (v < values) ? valueLong[v] : flagLong[v - values];
+            if (option == name)
+            {
+               exact = true;
+               takesValue = (v < values);
+               break;
+            }
+            if (option.compare(0, name.size(), name) == 0)
+            {
+               matches++;
+               takesValue = (v < values);
+            }
+         }
+         if (takesValue && (exact || matches == 1))
+         {
+            i++;
+         }
+         continue;
+      }
+
+      // -abc: flags, until one that takes a value (the rest of the
+      // argument, or the next one)
+      for (size_t c = 1; c < arg.size(); c++)
+      {
+         if (valueShort.find(arg[c]) != string::npos)
+         {
+            if (c == arg.size() - 1)
+            {
+               i++;
+            }
+            break;
+         }
+      }
+   }
+   return argc;
+}
+
 int main(int argc, char **argv)
 {
+   // Split off the command to run once the time is reached (if any)
+   int commandAt = CommandStart(argc, argv);
+   vector<char *> command;
+   for (int i = commandAt; i < argc; i++)
+   {
+      if (i > commandAt || string(argv[i]) != "--")
+      {
+         command.push_back(argv[i]);
+      }
+   }
 
    Date dObjStart;
    Date dObjFinish;
@@ -219,7 +314,7 @@ int main(int argc, char **argv)
    try
    {
       po::store(
-            po::parse_command_line(argc, argv, poAllOptions),
+            po::parse_command_line(commandAt, argv, poAllOptions),
             poVariablesMap);
       po::notify(poVariablesMap);
    }
@@ -361,6 +456,15 @@ int main(int argc, char **argv)
    {
       cout << "Current Time : "<< dObjStart.Str(sTimeFmt + " (%a)") << endl;
       cout << "Block Until  : "<< dObjFinish.Str(sTimeFmt + " (%a)") << endl;
+      if (!command.empty())
+      {
+         cout << "Command      :";
+         for (size_t i = 0; i < command.size(); i++)
+         {
+            cout << " " << command[i];
+         }
+         cout << endl;
+      }
    }
 
    if (!(poVariablesMap.count("test")))
@@ -372,6 +476,29 @@ int main(int argc, char **argv)
       {
          cout << "UnBlock Time : "
               << dObjNow.Str(sTimeFmt) << endl;
+      }
+
+      if (!command.empty())
+      {
+         // Become the command (like nice or timeout do): from here on the
+         // exit code, signals and output are all its own.  Nothing goes
+         // through a shell, so arguments are passed exactly as given.
+         cout.flush();
+         cerr.flush();
+         command.push_back(NULL);
+         execvp(command[0], &command[0]);
+
+         // Only reached if it could not be run (126 and 127 are what the
+         // shell uses for these)
+         int err = errno;
+         if (err == ENOENT)
+         {
+            cerr << "dateblock: " << command[0] << ": command not found"
+                 << endl;
+            return 127;
+         }
+         cerr << "dateblock: " << command[0] << ": " << strerror(err) << endl;
+         return 126;
       }
    }
    return 0;

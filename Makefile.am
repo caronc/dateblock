@@ -47,7 +47,4 @@ EXTRA_DIST = \
 	MANIFEST.in \
 	python/_dateblock.cpp \
 	python/dateblock/__init__.py \
-	python/dateblock/__main__.py \
-	python/dateblock/cli.py \
-	python/tests/test_dateblock.py \
-	python/tests/test_cli.py
+	python/tests/test_dateblock.py

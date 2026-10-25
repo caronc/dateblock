@@ -30,12 +30,14 @@ set -e
 mode=${1:-build}
 export LANG=C.UTF-8
 
-# Copy the source (only files git knows about when it is a git checkout)
+# Copy the source (only files git knows about when it is a git checkout,
+# leaving out any that were deleted but not committed yet)
 mkdir -p /tmp/src
 cd /src
 if git -c safe.directory=/src rev-parse --git-dir >/dev/null 2>&1; then
    git -c safe.directory=/src ls-files -z -co --exclude-standard | \
-      tar --null --ignore-failed-read -T - -cf - | tar -xf - -C /tmp/src
+      xargs -0 sh -c 'for f; do [ -e "$f" ] && printf "%s\0" "$f"; done' sh | \
+      tar --null -T - -cf - | tar -xf - -C /tmp/src
 else
    cp -a /src/. /tmp/src/
 fi

@@ -58,9 +58,7 @@ distribution packages do), run `make` first and then:
 ```bash
 DATEBLOCK_SHARED=1 pip install .
 ```
-This leaves out the Python `dateblock` command, since `make install`
-already provides the C++ one. If you installed libdateblock to `/usr/local`
-(the default), you may need to run `sudo ldconfig` so the library can be
+If you installed libdateblock to `/usr/local` (the default), you may need to run `sudo ldconfig` so the library can be
 found when Python loads the module.
 
 ## Packages (RPM, Debian and Arch Linux)

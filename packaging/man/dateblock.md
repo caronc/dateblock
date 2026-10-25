@@ -3,8 +3,8 @@ dateblock(1) -- block (sleep) until a cron-style moment in time
 
 ## SYNOPSIS
 
-`dateblock` [`-t`] [`-v`] [`-z` <ZONE>] `-c` <CRON> [`-i`]<br>
-`dateblock` [`-t`] [`-v`] [`-z` <ZONE>] [`-s` <SEC>] [`-n` <MIN>] [`-o` <HOUR>] [`-d` <DOM>] [`-m` <MONTH>] [`-w` <DOW>] [`-x` <DRIFT>]<br>
+`dateblock` [`-t`] [`-v`] [`-z` <ZONE>] `-c` <CRON> [`-i`] [[`--`] <COMMAND> [<ARGUMENTS>...]]<br>
+`dateblock` [`-t`] [`-v`] [`-z` <ZONE>] [`-s` <SEC>] [`-n` <MIN>] [`-o` <HOUR>] [`-d` <DOM>] [`-m` <MONTH>] [`-w` <DOW>] [`-x` <DRIFT>] [[`--`] <COMMAND> [<ARGUMENTS>...]]<br>
 `dateblock` `-h`
 
 ## DESCRIPTION
@@ -21,6 +21,9 @@ On top of the regular cron fields, **dateblock** can also:
   * _drift_; wait an extra number of seconds after the time is matched.
 
 Use `--test` to see when **dateblock** would unblock without waiting.
+
+Given a <COMMAND>, **dateblock** runs it once the time is reached and exits
+with the command's exit code; see [RUNNING A COMMAND][].
 
 ## OPTIONS
 
@@ -143,6 +146,25 @@ It works the same as a crontab(5) entry does:
     is the 1st, 6th, 11th and so on (without `--isc` it is the 5th, 10th,
     15th and so on).
 
+## RUNNING A COMMAND
+
+Anything after the options is a command for **dateblock** to run once the
+time is reached:
+
+    $ dateblock -n /15 -- ./backup.sh --full
+
+  * **dateblock** _becomes_ the command (with execvp(3), the way nice(1)
+    and timeout(1) do), so the exit code, signals and output are all the
+    command's own.
+  * The command starts at `--`, or at the first argument that is not one
+    of **dateblock**'s options (or an option's value). Everything from
+    there on is passed to the command exactly as given, without a shell,
+    so `dateblock -n 5 ls -l` runs `ls -l`. Use `--` when the command
+    itself starts with a dash.
+  * With `--test` the command is shown (on the `Command` line) but not
+    run. If the schedule is invalid or impossible the command is never
+    run.
+
 ## TIMEZONES
 
 The schedule is read in this computer's timezone (the `TZ` environment
@@ -217,19 +239,31 @@ See when a schedule would next run, without waiting:
     Current Time : 2026-10-24 13:05:00 (Sat)
     Block Until  : 2026-10-25 02:30:00 (Sun)
 
-Run a command every 15 minutes, on the quarter hour:
+Run a backup at the next quarter hour; the exit code is the backup's:
+
+    $ dateblock -n /15 -- ./backup.sh --full
+
+Run it every 15 minutes, on the quarter hour:
 
     $ while dateblock -n /15; do ./backup.sh; done
 
 ## EXIT STATUS
 
+With a <COMMAND>, **dateblock** exits with the command's own exit code
+once it has run. Otherwise, or if the command never got to run:
+
   * `0`:
     The matching time was reached (or, with `--test`, was worked out).
   * `1`:
     No options were given, the schedule is not valid, the `--timezone` is
-    unknown, or no matching time exists (such as the 31st of February). A schedule counts as impossible
-    when nothing matches within the next 400 years, the length of time it
-    takes the calendar to repeat itself.
+    unknown, or no matching time exists (such as the 31st of February). A
+    schedule counts as impossible when nothing matches within the next 400
+    years, the length of time it takes the calendar to repeat itself.
+  * `126`:
+    The <COMMAND> was found but could not be run (ie: it is not
+    executable).
+  * `127`:
+    The <COMMAND> could not be found.
   * `255`:
     The command line could not be parsed.
 
@@ -238,7 +272,7 @@ exits with the usual status for that signal.
 
 ## SEE ALSO
 
-sleep(1), crontab(5), date(1)
+sleep(1), crontab(5), date(1), nice(1), timeout(1), execvp(3)
 
 ## AUTHOR
 
