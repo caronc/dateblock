@@ -218,6 +218,17 @@ sleep(1), crontab(5), date(1)
 
 Chris Caron &lt;lead2gold@gmail.com&gt;
 
+## BUGS
+
+If you find any bugs, please make them known at:
+https://github.com/caronc/dateblock/issues
+
+## DONATIONS
+If you found Apprise useful at all, [please consider sponsoring][sponsorship] or [donating][donating]!
+
+[sponsorship]: https://github.com/sponsors/caronc
+[donating]: https://www.paypal.com/donate/?hosted_button_id=CR6YF7KLQWQ5E
+
 ## COPYRIGHT
 
 Copyright (C) 2013-2026 Chris Caron. License GPLv2+: GNU GPL version 2 or
