@@ -16,12 +16,43 @@
 # this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 """Tests for the dateblock Python module (run with: python3 -m unittest)."""
+import os
 import time as _time
 import unittest
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone, tzinfo
 
 import dateblock
 from dateblock import dateblock as db
+
+try:
+    from zoneinfo import ZoneInfo
+    ZoneInfo("America/New_York")
+except Exception:  # pragma: no cover - no timezone data (ie: Windows)
+    ZoneInfo = None
+
+needs_zoneinfo = unittest.skipIf(ZoneInfo is None, "no timezone data")
+
+
+def brute_force(ref, tz, hours, minutes):
+    """The first whole minute after 'ref' whose clock time in 'tz' has an
+    hour in 'hours' and a minute in 'minutes' (second 0)."""
+    t = int(ref.timestamp()) // 60 * 60 + 60
+    for _ in range(3 * 24 * 60):
+        local = datetime.fromtimestamp(t, tz)
+        if local.hour in hours and local.minute in minutes:
+            return local
+        t += 60
+    raise AssertionError("no match within 3 days")
+
+
+class _BrokenZone(tzinfo):
+    """A tzinfo that fails as soon as the local time is asked for."""
+
+    def utcoffset(self, dt):
+        return timedelta(0)
+
+    def dst(self, dt):
+        raise ZeroDivisionError("broken zone")
 
 
 class DateblockTests(unittest.TestCase):
@@ -53,8 +84,123 @@ class DateblockTests(unittest.TestCase):
 
     def test_timezone_aware_reference(self):
         ref = datetime(2000, 1, 1, tzinfo=timezone.utc)
-        expected = datetime.fromtimestamp(ref.timestamp() + 1)
-        self.assertEqual(db("*/1", ref=ref, block=False), expected)
+        result = db("*/1", ref=ref, block=False)
+        self.assertEqual(result, ref + timedelta(seconds=1))
+        self.assertIs(result.tzinfo, timezone.utc)
+
+    def test_naive_reference_returns_naive(self):
+        self.assertIsNone(db("*/1", ref=datetime(2000, 1, 1),
+                             block=False).tzinfo)
+        self.assertIsNone(db("*/1", block=False).tzinfo)
+
+    def test_cron_is_read_in_the_reference_timezone(self):
+        # The same moment, seen from two timezones
+        plus9 = timezone(timedelta(hours=9))
+        ref = datetime(2025, 1, 1, 0, 0, 30, tzinfo=plus9)
+        self.assertEqual(db("0 0 9", ref=ref, block=False),
+                         datetime(2025, 1, 1, 9, tzinfo=plus9))
+        utc_ref = ref.astimezone(timezone.utc)   # 2024-12-31 15:00:30
+        self.assertEqual(db("0 0 9", ref=utc_ref, block=False),
+                         datetime(2025, 1, 1, 9, tzinfo=timezone.utc))
+
+    def test_days_follow_the_reference_timezone(self):
+        # Feb 29th 00:00 in +14:00 is still Feb 28th in UTC
+        plus14 = timezone(timedelta(hours=14))
+        result = db("0 0 0 29 2", ref=datetime(2025, 3, 1, tzinfo=plus14),
+                    block=False)
+        self.assertEqual(result, datetime(2028, 2, 29, tzinfo=plus14))
+        self.assertEqual(result.astimezone(timezone.utc).day, 28)
+
+    @unittest.skipUnless(hasattr(_time, "tzset"), "needs time.tzset()")
+    def test_computer_timezone_does_not_matter(self):
+        ref = datetime(2025, 3, 8, 12, tzinfo=timezone(timedelta(hours=-5)))
+        saved = os.environ.get("TZ")
+        results = []
+        try:
+            for tz in ("UTC", "Asia/Tokyo", "America/Los_Angeles"):
+                os.environ["TZ"] = tz
+                _time.tzset()
+                results.append(db("0 30 2", ref=ref, block=False))
+        finally:
+            if saved is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = saved
+            _time.tzset()
+        self.assertEqual(len(set(results)), 1)
+
+    @needs_zoneinfo
+    def test_distant_future_zone_with_timedelta(self):
+        zone = ZoneInfo("America/New_York")
+        # The clocks go forward on the second Sunday of March
+        first = date(2090, 3, 1)
+        change = first + timedelta(days=(6 - first.weekday()) % 7 + 7)
+        ref = datetime(2090, 3, 1, tzinfo=zone) + \
+            timedelta(days=change.day - 1)
+        # 02:30 doesn't exist that day, so it is the next day's 02:30 (EDT)
+        result = db("0 30 2", ref=ref, block=False)
+        self.assertEqual(result, datetime(2090, 3, change.day + 1, 2, 30,
+                                          tzinfo=zone))
+        self.assertIs(result.tzinfo, zone)
+        self.assertEqual(result.utcoffset(), timedelta(hours=-4))
+        # Noon the same day is already daylight saving time
+        noon = db("0 0 12", ref=ref, block=False)
+        self.assertEqual(noon.utcoffset(), timedelta(hours=-4))
+        # Only 11 real hours after midnight (one went missing at 02:00)
+        self.assertEqual(noon.timestamp() - ref.timestamp(), 11 * 3600)
+
+    @needs_zoneinfo
+    def test_clock_changes_match_brute_force(self):
+        crons = (("0 30 2", {2}, {30}), ("0 0 0", {0}, {0}),
+                 ("0 15 1", {1}, {15}), ("0 0,45 0-3", {0, 1, 2, 3},
+                                         {0, 45}))
+        for name in ("America/New_York", "Australia/Lord_Howe",
+                     "Asia/Kathmandu", "Pacific/Kiritimati",
+                     "America/Santiago", "Europe/London"):
+            zone = ZoneInfo(name)
+            for year in (2025, 2090):
+                for month in range(1, 13):
+                    for day in (1, 2, 5, 6, 7, 8, 9, 13, 14, 25, 26, 27, 28):
+                        for hour in (0, 1, 2, 23):
+                            ref = datetime(year, month, day, hour, 10,
+                                           tzinfo=zone)
+                            for cron, hours, minutes in crons:
+                                with self.subTest(zone=name, ref=ref,
+                                                  cron=cron):
+                                    self.assertEqual(
+                                        db(cron, ref=ref, block=False),
+                                        brute_force(ref, zone, hours,
+                                                    minutes))
+
+    @needs_zoneinfo
+    def test_isc_in_the_reference_timezone(self):
+        zone = ZoneInfo("Europe/London")
+        ref = datetime(2025, 3, 29, 12, tzinfo=zone)
+        # 01:30 on 2025-03-30 doesn't exist in London
+        self.assertEqual(db("30 1 * * *", isc=True, ref=ref, block=False),
+                         datetime(2025, 3, 31, 1, 30, tzinfo=zone))
+
+    def test_aware_time_reference_uses_today_over_there(self):
+        plus14 = timezone(timedelta(hours=14))
+        result = db("*/1", ref=time(10, 0, 0, tzinfo=plus14), block=False)
+        self.assertIs(result.tzinfo, plus14)
+        self.assertEqual(result.time().replace(tzinfo=None), time(10, 0, 1))
+        self.assertIn(result.date(),
+                      (datetime.now(plus14).date(),
+                       datetime.now(plus14).date() - timedelta(days=1)))
+
+    def test_aware_reference_blocks_until_that_moment(self):
+        plus14 = timezone(timedelta(hours=14))
+        start = _time.monotonic()
+        result = db("/1", ref=datetime.now(plus14))
+        self.assertLess(_time.monotonic() - start, 1.5)
+        self.assertIs(result.tzinfo, plus14)
+        self.assertLessEqual(result, datetime.now(timezone.utc))
+
+    def test_tzinfo_error_is_raised(self):
+        with self.assertRaises(ZeroDivisionError):
+            db("*/1", ref=datetime(2025, 1, 1, tzinfo=_BrokenZone()),
+               block=False)
 
     def test_timedelta_reference_future(self):
         actual = db("*/1", ref=timedelta(seconds=5), block=False)
@@ -183,8 +329,10 @@ class DateblockTests(unittest.TestCase):
                 db(cron, block=False)
 
     def test_result_past_year_9999_raises_before_blocking(self):
+        # Windows can't work with dates past the year 3000 at all, so it
+        # refuses the reference itself (OverflowError)
         start = _time.monotonic()
-        with self.assertRaises(ValueError):
+        with self.assertRaises((ValueError, OverflowError)):
             db("0 0 0 1 1", ref=datetime(9999, 6, 1))
         self.assertLess(_time.monotonic() - start, 1)
 
@@ -227,6 +375,26 @@ class DateblockTests(unittest.TestCase):
         for ref in (float("nan"), float("inf"), -float("inf"), 1e300):
             with self.assertRaises(OverflowError):
                 db("*/1", ref=ref, block=False)
+
+    def test_huge_epoch_reference(self):
+        for ref in (2 ** 62, 2 ** 63 - 1, 2 ** 63, -2 ** 62,
+                    float(2 ** 63), float(2 ** 62)):
+            with self.assertRaises(OverflowError):
+                db("*/1", ref=ref, block=False)
+
+    def test_wildcard_mixed_into_a_list_raises_syntax_error(self):
+        for cron, isc in (("0 *,5", False), ("0 0 *,13 * 1", True),
+                          ("5,* * * * *", True)):
+            with self.assertRaises(SyntaxError):
+                db(cron, isc=isc, block=False)
+        # A step next to a value is fine
+        self.assertEqual(db("0 */20,3", ref=datetime(2025, 6, 1, 0, 0, 30),
+                            block=False),
+                         datetime(2025, 6, 1, 0, 3))
+
+    def test_huge_repeated_list_raises_syntax_error(self):
+        with self.assertRaises(SyntaxError):
+            db("* " + ",".join(["0"] * 10001), block=False)
 
     def test_bad_argument_types(self):
         with self.assertRaises(TypeError):

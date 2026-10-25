@@ -24,6 +24,9 @@
 #include <sstream>
 #include <string>
 #include <stdexcept>
+#include <stdlib.h>
+#include <time.h>
+#include <sys/stat.h>
 #include <boost/program_options.hpp>
 #include "Date.h"
 #include "dateblock.h"
@@ -70,7 +73,8 @@ void ProgramExamples()
    cerr << " Note: All variations of the syntax mentioned above can be mixed"
      << " if separated" << endl << "       using the 'comma' (Separator)"
      << " operator.  ie: */a,b,c-d,/e is valid." << endl
-     << "       However: x-y-z is not valid, nor is /x/y or /x-y. All"
+     << "       However: x-y-z is not valid, nor is /x/y, /x-y or '*' mixed"
+     << " with" << endl << "       other entries (ie: *,5). All"
      << " values must be" << endl << "       within the range of it's time type."
      << " Thus 400-4000 would never work since" << endl << "       no time"
      << " constraint even resides within that range."
@@ -135,12 +139,41 @@ void ProgramExamples()
      << "          2. $> dateblock -c \"* 5 * * * *\""
      << endl << endl;
 
+   cerr << "$> dateblock -z Asia/Tokyo -c \"0 0 9\"" << endl
+     << "    This would block until 9:00 in Tokyo, whatever timezone this"
+     << endl << "    computer is in (daylight saving follows that timezone)."
+     << endl << endl;
+
    cerr << "$> dateblock -o /5 -d 1-14,20" << endl
      << "    This would block until a hour divisible by 5 was reached on"
      << " the first half" << endl << "     of the month as well as the"
      << " 20th of the month) Hours divisible by 5 are: 0,"
      << endl <<  "     5,10,15 and 20."
      << endl << endl;
+}
+
+// True if 'name' (ie: America/Toronto) is in this computer's timezone
+// database.  Anything else would quietly be treated as UTC, so it is
+// checked first.  Names may not be paths of their own.
+static bool KnownTimeZone(const string& name)
+{
+   if (name.empty() || name[0] == '/' || name.find("..") != string::npos)
+   {
+      return false;
+   }
+   const char *dirs[] = {getenv("TZDIR"), "/usr/share/zoneinfo",
+                         "/usr/lib/zoneinfo", "/usr/share/lib/zoneinfo"};
+   for (unsigned i = 0; i < sizeof(dirs)/sizeof(dirs[0]); i++)
+   {
+      struct stat st;
+      if (dirs[i] != NULL &&
+          stat((string(dirs[i]) + "/" + name).c_str(), &st) == 0 &&
+          S_ISREG(st.st_mode))
+      {
+         return true;
+      }
+   }
+   return false;
 }
 
 int main(int argc, char **argv)
@@ -175,6 +208,8 @@ int main(int argc, char **argv)
        ("dow,w", po::value<string>(), "Day of Week (0-6) {Sun=0,...,Sat=6}")
        ("cron,c", po::value<string>(), "Cron string formatting")
        ("drift,x", po::value<string>(), "Additional drift time (in seconds).")
+       ("timezone,z", po::value<string>(), "Timezone to read the schedule in "
+        "(ie: America/Toronto); defaults to this computer's.")
    ;
 
    // Parse all the options and ensure the critical ones have been defined.
@@ -185,6 +220,7 @@ int main(int argc, char **argv)
       po::store(
             po::parse_command_line(argc, argv, poAllOptions),
             poVariablesMap);
+      po::notify(poVariablesMap);
    }
    catch(exception& e)
    {
@@ -192,7 +228,6 @@ int main(int argc, char **argv)
       cerr << "Exiting." << endl;
       return -1;
    }
-   po::notify(poVariablesMap);
    if (poVariablesMap.count("help"))
    {
       ProgramDetails();
@@ -215,6 +250,24 @@ int main(int argc, char **argv)
       cerr << poAllOptions << endl;
       ProgramExamples();
       return 1;
+   }
+
+   // Read the schedule (and show the times) in another timezone.  Only
+   // this program's own TZ changes; the moment it unblocks at is the same
+   // everywhere.
+   string sTimeFmt = "%Y-%m-%d %H:%M:%S";
+   if (poVariablesMap.count("timezone"))
+   {
+      string zone = poVariablesMap["timezone"].as<string>();
+      if (!KnownTimeZone(zone))
+      {
+         cerr << "Error: Unknown timezone '" << zone << "'" << endl;
+         return 1;
+      }
+      setenv("TZ", zone.c_str(), 1);
+      tzset();
+      dObjStart.Set();
+      sTimeFmt += " %Z";
    }
 
    if (!poVariablesMap.count("cron"))
@@ -346,8 +399,8 @@ int main(int argc, char **argv)
 
    if (poVariablesMap.count("verbose") || poVariablesMap.count("test"))
    {
-      cout << "Current Time : "<< dObjStart.Str("%Y-%m-%d %H:%M:%S (%a)") << endl;
-      cout << "Block Until  : "<< dObjFinish.Str("%Y-%m-%d %H:%M:%S (%a)") << endl;
+      cout << "Current Time : "<< dObjStart.Str(sTimeFmt + " (%a)") << endl;
+      cout << "Block Until  : "<< dObjFinish.Str(sTimeFmt + " (%a)") << endl;
    }
 
    if (!(poVariablesMap.count("test")))
@@ -358,7 +411,7 @@ int main(int argc, char **argv)
       if (poVariablesMap.count("verbose"))
       {
          cout << "UnBlock Time : "
-              << dObjNow.Str("%Y-%m-%d %H:%M:%S") << endl;
+              << dObjNow.Str(sTimeFmt) << endl;
       }
    }
    return 0;

@@ -22,13 +22,14 @@ distribution packages; see ``dateblock --help`` or ``man dateblock``.
 
 Exit codes:
  - 0:   the time was reached (or worked out, with --test)
- - 1:   bad or impossible schedule
+ - 1:   bad or impossible schedule, or an unknown timezone
  - 130: interrupted (Ctrl-C)
  - 255: the command line could not be parsed
 """
 import argparse
 import sys
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from . import __version__
 from ._dateblock import dateblock
@@ -40,10 +41,14 @@ examples:
   dateblock -c '* 5 +20'        20 seconds after 5 minutes past the hour
   dateblock -i -c '0 9 * * 1-5' 9:00 on weekdays (regular crontab entry)
   dateblock -t -c '0 30 2'      when would 2:30:00 next happen?
+  dateblock -z Asia/Tokyo -c '0 0 9'
+                                9:00 in Tokyo, whatever timezone this
+                                computer is in
 
 cron string fields (--cron):
   sec min hour day-of-month month day-of-week drift
-  Each field accepts x, */x (or /x), x-y and x,y; '*' matches anything.
+  Each field accepts x, */x (or /x), x-y, x-y/z and x,y; '*' (on its
+  own) matches anything.
   Missing fields are filled in with '*'.  An entry such as '+20' jumps
   straight to the drift field.
 """
@@ -85,11 +90,29 @@ def build_parser():
                         help="read --cron as a regular 5 field crontab entry")
     parser.add_argument("-c", "--cron",
                         help="the whole schedule as one cron string")
+    parser.add_argument("-z", "--timezone",
+                        help="timezone to read the schedule in "
+                             "(ie: America/Toronto); defaults to this "
+                             "computer's")
     for name, short, text in FIELDS:
         parser.add_argument("-" + short, "--" + name, help=text)
     parser.add_argument("-V", "--version", action="version",
                         version="%(prog)s " + __version__)
     return parser
+
+
+def _zone(name):
+    """The timezone called 'name', or None (after saying why) if it is
+    unknown."""
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        hint = ""
+        if sys.platform == "win32":
+            hint = " (pip install tzdata adds the timezone database)"
+        print("Error: Unknown timezone '%s'%s" % (name, hint),
+              file=sys.stderr)
+        return None
 
 
 def main(argv=None):
@@ -108,7 +131,14 @@ def main(argv=None):
         cron = " ".join("*" if f is None else f for f in fields)
         isc = False
 
-    start = datetime.now().replace(microsecond=0)
+    zone, fmt = None, TIME_FORMAT
+    if args.timezone is not None:
+        zone = _zone(args.timezone)
+        if zone is None:
+            return 1
+        fmt += " %Z"
+
+    start = datetime.now(zone).replace(microsecond=0)
     try:
         finish = dateblock(cron, block=False, ref=start, isc=isc)
     except SyntaxError:
@@ -119,8 +149,8 @@ def main(argv=None):
         return 1
 
     if args.verbose or args.test:
-        print("Current Time : %s" % start.strftime(TIME_FORMAT + " (%a)"))
-        print("Block Until  : %s" % finish.strftime(TIME_FORMAT + " (%a)"))
+        print("Current Time : %s" % start.strftime(fmt + " (%a)"))
+        print("Block Until  : %s" % finish.strftime(fmt + " (%a)"))
 
     if not args.test:
         try:
@@ -128,7 +158,7 @@ def main(argv=None):
         except KeyboardInterrupt:
             return 130
         if args.verbose:
-            print("UnBlock Time : %s" % datetime.now().strftime(TIME_FORMAT))
+            print("UnBlock Time : %s" % datetime.now(zone).strftime(fmt))
     return 0
 
 

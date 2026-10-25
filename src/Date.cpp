@@ -65,14 +65,51 @@ namespace {
       return (month == 1 && leap) ? 29 : days[month];
    }
 
-   // Thread safe localtime() (Windows spells it localtime_s)
+   // Thread safe localtime() (Windows spells it localtime_s).  Fails for
+   // times whose year doesn't fit in an int (Year() adds 1900 to tm_year).
    bool LocalTime(time_t tVal, struct tm& tmOut)
    {
+      struct tm tmp;
    #ifdef _WIN32
-      return localtime_s(&tmOut, &tVal) == 0;
+      if (localtime_s(&tmp, &tVal) != 0)
+         return false;
    #else
-      return localtime_r(&tVal, &tmOut) != NULL;
+      if (localtime_r(&tVal, &tmp) == NULL)
+         return false;
    #endif
+      if (tmp.tm_year > INT_MAX - 1900)
+         return false;
+      tmOut = tmp;
+      return true;
+   }
+
+   // mktime() that reports failure.  'tmOut' and 'tOut' are only changed
+   // when it works.
+   //  - mktime() returns -1 both on failure and for one real second
+   //    (1969-12-31 23:59:59 UTC); it only fills in tm_wday when it works,
+   //    which tells the two apart.
+   //  - Years that don't fit in an int (once 1900 is added) fail too.
+   bool MakeTime(const struct tm& tmIn, struct tm& tmOut, time_t& tOut)
+   {
+      struct tm tmp = tmIn;
+      tmp.tm_wday = -1;
+      time_t t = mktime(&tmp);
+      if ((t == (time_t)-1 && tmp.tm_wday == -1) ||
+          tmp.tm_year > INT_MAX - 1900)
+         return false;
+      tmOut = tmp;
+      tOut = t;
+      return true;
+   }
+
+   // The same, for a date worked out from a calendar change (a new month,
+   // year, hour...).  Daylight saving is worked out for the new date, so
+   // the clock time stays as asked for (12:00 in July plus 5 months is
+   // 12:00 in December, not 11:00).
+   bool MakeLocalTime(struct tm tmIn, struct tm& tmOut, time_t& tOut)
+   {
+      tmIn.tm_isdst = -1;
+      return MakeTime(tmIn, tmOut, tOut);
    }
 
    // The current time (to the nanosecond where available).  This reads the
@@ -226,22 +263,121 @@ namespace {
       return s.domOrDow ? (dom || dow) : (dom && dow);
    }
 
-   // Moves 't' forward to a local date/time worked out by mktime().  It
-   // always moves forward, even if the clock change around a daylight
-   // saving switch makes mktime() land a little early.
-   time_t JumpTo(time_t t, struct tm target)
+   // Days from 1970-01-01 to the given date (month is 1-12).  Works for
+   // any year; see https://howardhinnant.github.io/date_algorithms.html
+   long long DaysFromCivil(long long year, int month, int day)
    {
-      target.tm_isdst = -1;
-      time_t next = mktime(&target);
+      year -= (month <= 2) ? 1 : 0;
+      long long era = (year >= 0 ? year : year - 399) / 400;
+      long long yoe = year - era * 400;
+      long long doy = (153 * (month > 2 ? month - 3 : month + 9) + 2) / 5 +
+                      day - 1;
+      long long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+      return era * 146097 + doe - 719468;
+   }
+
+   // The clock time in 'tm' counted in seconds as if it were UTC.  Fields
+   // past their end roll over (month 12 is January of the next year, day
+   // 32 is the 1st of the next month and so on).
+   long long WallSeconds(const struct tm& tm)
+   {
+      long long year = (long long)tm.tm_year + 1900 + tm.tm_mon / 12;
+      int month = tm.tm_mon % 12;
+      if (month < 0)
+      {
+         month += 12;
+         year--;
+      }
+      long long days = DaysFromCivil(year, month + 1, 1) + tm.tm_mday - 1;
+      return days * 86400 + tm.tm_hour * 3600LL + tm.tm_min * 60LL + tm.tm_sec;
+   }
+
+   // The local time at 't', in the computer's own timezone (zone NULL) or
+   // in 'zone'
+   bool ZoneLocal(const Date::TimeZone* zone, time_t t, struct tm& tmOut)
+   {
+      if (zone == NULL)
+         return LocalTime(t, tmOut);
+
+      struct tm tm;
+      memset(&tm, 0, sizeof(tm));
+      if (!zone->ToLocal(t, tm) ||
+          tm.tm_mon < 0 || tm.tm_mon > 11 || tm.tm_mday < 1 ||
+          tm.tm_mday > DaysInMonth(tm.tm_year + 1900, tm.tm_mon) ||
+          tm.tm_hour < 0 || tm.tm_hour > 23 || tm.tm_min < 0 ||
+          tm.tm_min > 59 || tm.tm_sec < 0 || tm.tm_sec > 60 ||
+          tm.tm_year > INT_MAX - 1900)
+         return false;
+
+      // 1970-01-01 was a Thursday (4)
+      long long days = DaysFromCivil(tm.tm_year + 1900LL, tm.tm_mon + 1,
+                                     tm.tm_mday);
+      tm.tm_wday = (int)(((days + 4) % 7 + 7) % 7);
+      tm.tm_isdst = -1;
+      tmOut = tm;
+      return true;
+   }
+
+   // The moment the clocks in 'zone' show 'target' (like mktime()).
+   //  - When that time happens twice (the clocks went back), the first.
+   //  - When it never happens (the clocks went forward over it), the
+   //    moment just after the jump.
+   //  - Returns false if the zone can't tell us.
+   bool ZoneMakeTime(const Date::TimeZone* zone, const struct tm& target,
+                     time_t& out)
+   {
+      // Guess with the offset in use around that time, then again with
+      // the offset at the first guess
+      long long wall = WallSeconds(target);
+      struct tm tm;
+      if (!ZoneLocal(zone, (time_t)wall, tm))
+         return false;
+      long long offA = WallSeconds(tm) - wall;
+      time_t a = (time_t)(wall - offA);
+      if (!ZoneLocal(zone, a, tm))
+         return false;
+      long long offB = WallSeconds(tm) - a;
+      time_t b = (time_t)(wall - offB);
+      if (!ZoneLocal(zone, b, tm))
+         return false;
+
+      bool aShows = (offA == offB);
+      bool bShows = (WallSeconds(tm) - b == offB);
+      if (aShows && bShows)
+         out = (a < b) ? a : b;
+      else if (aShows || bShows)
+         out = aShows ? a : b;
+      else
+         out = (a > b) ? a : b;
+      return true;
+   }
+
+   // Moves 't' forward to a local date/time ('zone' NULL uses mktime()).
+   // It always moves forward, even if the clock change around a daylight
+   // saving switch makes the result land a little early.
+   time_t JumpTo(const Date::TimeZone* zone, time_t t, struct tm target)
+   {
+      time_t next;
+      if (zone == NULL)
+      {
+         target.tm_isdst = -1;
+         next = mktime(&target);
+      }
+      else if (!ZoneMakeTime(zone, target, next))
+      {
+         next = t;
+      }
       return (next > t) ? next : t + 3600;
    }
 
    // The first moment after 'after' whose local time matches 's'.
+   //  - 'zone' NULL means the computer's own timezone.
    //  - Moves forward one real moment at a time (jumping over whole
    //    seconds, minutes, hours, days and months that can't match), so a
    //    daylight saving change never makes it skip a match.
    //  - Throws std::runtime_error if nothing matches.
-   time_t NextMatch(const Schedule& s, time_t after)
+   time_t NextMatch(const Schedule& s, time_t after,
+                    const Date::TimeZone* zone)
    {
       const time_t max = numeric_limits<time_t>::max();
       if (after == max)
@@ -250,7 +386,7 @@ namespace {
       time_t limit = (after > max - SEARCH_HORIZON) ? max : after + SEARCH_HORIZON;
       struct tm tm;
 
-      while (t <= limit && LocalTime(t, tm))
+      while (t <= limit && ZoneLocal(zone, t, tm))
       {
          if (!Has(s.month, tm.tm_mon + 1))
          {
@@ -258,7 +394,7 @@ namespace {
             next.tm_mon++;
             next.tm_mday = 1;
             next.tm_hour = next.tm_min = next.tm_sec = 0;
-            t = JumpTo(t, next);
+            t = JumpTo(zone, t, next);
             continue;
          }
 
@@ -267,7 +403,7 @@ namespace {
             struct tm next = tm;
             next.tm_mday++;
             next.tm_hour = next.tm_min = next.tm_sec = 0;
-            t = JumpTo(t, next);
+            t = JumpTo(zone, t, next);
             continue;
          }
 
@@ -421,8 +557,7 @@ const Date & Date::operator=(const Date& right)
 //------------------------------------------------
 const Date & Date::operator=(const time_t &right)
 {
-   m_time = right;
-   LocalTime(m_time, m_tmObj);
+   Set(right);
    return (*this);
 }
 
@@ -433,8 +568,7 @@ const Date & Date::operator=(const time_t &right)
 //------------------------------------------------
 const Date & Date::operator=(const struct tm &right)
 {
-   memcpy(&m_tmObj,&right,sizeof(struct tm));
-   m_time = mktime(&m_tmObj);
+   Set(right);
    return (*this);
 }
 
@@ -505,8 +639,13 @@ void Date::Set(const Date& dObj)
 //------------------------------------------------
 void Date::Set(const time_t &tVal)
 {
+   struct tm tmObj;
+   if (!LocalTime(tVal, tmObj))
+   {
+      throw out_of_range("The time can't be shown as a local date.");
+   }
    m_time = tVal;
-   LocalTime(m_time, m_tmObj);
+   m_tmObj = tmObj;
 }
 
 //------------------------------------------------
@@ -516,8 +655,10 @@ void Date::Set(const time_t &tVal)
 //------------------------------------------------
 void Date::Set(const struct tm &tmObj)
 {
-   memcpy(&m_tmObj,&tmObj,sizeof(struct tm));
-   m_time = mktime(&m_tmObj);
+   if (!MakeTime(tmObj, m_tmObj, m_time))
+   {
+      throw out_of_range("The date is outside of the supported range.");
+   }
 }
 
 //------------------------------------------------
@@ -634,7 +775,7 @@ const bool Date::AddSec(const int seconds)
 {
    // Aquire Time Now
    struct tm tmTime;
-   time_t tTmp=mktime(&m_tmObj)+seconds;
+   time_t tTmp=m_time+seconds;
    if (!LocalTime(tTmp, tmTime))
    {
       return false;
@@ -654,7 +795,7 @@ const bool Date::AddMin(const int minutes)
 {
    // Aquire Time Now
    struct tm tmTime;
-   time_t tTmp=mktime(&m_tmObj)+(time_t)minutes*60;
+   time_t tTmp=m_time+(time_t)minutes*60;
    if (!LocalTime(tTmp, tmTime))
    {
       return false;
@@ -674,7 +815,7 @@ const bool Date::AddHour(const int hours)
 {
    // Aquire Time Now
    struct tm tmTime;
-   time_t tTmp=mktime(&m_tmObj)+(time_t)hours*3600;
+   time_t tTmp=m_time+(time_t)hours*3600;
    if (!LocalTime(tTmp, tmTime))
    {
       return false;
@@ -696,7 +837,7 @@ const bool Date::AddDOM(const int days)
 {
    // Aquire Time Now
    struct tm tmTime;
-   time_t tTmp=mktime(&m_tmObj)+(time_t)days*86400;
+   time_t tTmp=m_time+(time_t)days*86400;
    if (!LocalTime(tTmp, tmTime))
    {
       return false;
@@ -720,8 +861,6 @@ const bool Date::AddMonth(const int months)
    // Temporarily Store the Current Day
    int tmpDays = tmTime.tm_mday;
 
-   tmTime.tm_mday = T_DOM_MIN; // Store Min Day (temporary)
-
    // Work out the new month and year directly (no loop), refusing years
    // that don't fit in a struct tm
    long long total = (long long)tmTime.tm_mon + months;
@@ -733,16 +872,18 @@ const bool Date::AddMonth(const int months)
       years--;
    }
    long long year = (long long)tmTime.tm_year + years;
-   if (year < INT_MIN || year > INT_MAX)
+   if (year < INT_MIN || year > INT_MAX - 1900)
    {
       return false;
    }
    tmTime.tm_mon = month;
    tmTime.tm_year = (int)year;
 
-   m_time=mktime(&tmTime);
-   memcpy(&m_tmObj,&tmTime,sizeof(struct tm));
-   return SetDOM(tmpDays);
+   // Past the end of the new month means its last day (Jan 31st plus a
+   // month is Feb 28th or 29th)
+   int maxDays = DaysInMonth((int)(year + 1900), month);
+   tmTime.tm_mday = (tmpDays > maxDays) ? maxDays : tmpDays;
+   return MakeLocalTime(tmTime, m_tmObj, m_time);
 }
 
 //--------------------------------------------------
@@ -755,14 +896,12 @@ const bool Date::AddYear(const int years)
    struct tm tmTime;
    memcpy(&tmTime,&m_tmObj,sizeof(struct tm));
    long long year = (long long)tmTime.tm_year + years;
-   if (year < INT_MIN || year > INT_MAX)
+   if (year < INT_MIN || year > INT_MAX - 1900)
    {
       return false;
    }
    tmTime.tm_year = (int)year;
-   m_time=mktime(&tmTime);
-   memcpy(&m_tmObj,&tmTime,sizeof(struct tm));
-   return true;
+   return MakeLocalTime(tmTime, m_tmObj, m_time);
 }
 
 //------------------------------------------------
@@ -772,14 +911,13 @@ const bool Date::AddYear(const int years)
 //------------------------------------------------
 const bool Date::SetSec(const int seconds)
 {
-   bool ok = false;
-   if(seconds >= T_SEC_MIN && seconds <= T_SEC_MAX)
+   if(seconds < T_SEC_MIN || seconds > T_SEC_MAX)
    {
-      m_tmObj.tm_sec = seconds;
-      m_time=mktime(&m_tmObj);
-      ok=true;
+      return false;
    }
-   return ok;
+   struct tm tmTime = m_tmObj;
+   tmTime.tm_sec = seconds;
+   return MakeLocalTime(tmTime, m_tmObj, m_time);
 }
 
 //------------------------------------------------
@@ -789,14 +927,13 @@ const bool Date::SetSec(const int seconds)
 //------------------------------------------------
 const bool Date::SetMin(const int minutes)
 {
-   bool ok = false;
-   if(minutes >= T_MIN_MIN && minutes <= T_MIN_MAX)
+   if(minutes < T_MIN_MIN || minutes > T_MIN_MAX)
    {
-      m_tmObj.tm_min = minutes;
-      m_time=mktime(&m_tmObj);
-      ok=true;
+      return false;
    }
-   return ok;
+   struct tm tmTime = m_tmObj;
+   tmTime.tm_min = minutes;
+   return MakeLocalTime(tmTime, m_tmObj, m_time);
 }
 
 //------------------------------------------------
@@ -806,14 +943,13 @@ const bool Date::SetMin(const int minutes)
 //------------------------------------------------
 const bool Date::SetHour(const int hours)
 {
-   bool ok = false;
-   if(hours >= T_HOUR_MIN && hours <= T_HOUR_MAX)
+   if(hours < T_HOUR_MIN || hours > T_HOUR_MAX)
    {
-      m_tmObj.tm_hour = hours;
-      m_time=mktime(&m_tmObj);
-      ok=true;
+      return false;
    }
-   return ok;
+   struct tm tmTime = m_tmObj;
+   tmTime.tm_hour = hours;
+   return MakeLocalTime(tmTime, m_tmObj, m_time);
 }
 
 //------------------------------------------------
@@ -823,23 +959,15 @@ const bool Date::SetHour(const int hours)
 //------------------------------------------------
 const bool Date::SetDOM(const int days)
 {
-   bool ok = false;
-   if(days >= T_DOM_MIN && days <= T_DOM_MAX)
+   if(days < T_DOM_MIN || days > T_DOM_MAX)
    {
-      // Apply Correction If Nessisary
-      int MaxDays=MaxDOMsThisMonth();
-      if(days > MaxDays)
-      {
-         m_tmObj.tm_mday = MaxDays;
-      }
-      else
-      {
-         m_tmObj.tm_mday = days;
-      }
-      m_time=mktime(&m_tmObj);
-      ok=true;
+      return false;
    }
-   return ok;
+   // Past the end of the month means its last day
+   int maxDays = MaxDOMsThisMonth();
+   struct tm tmTime = m_tmObj;
+   tmTime.tm_mday = (days > maxDays) ? maxDays : days;
+   return MakeLocalTime(tmTime, m_tmObj, m_time);
 }
 
 //------------------------------------------------
@@ -849,14 +977,13 @@ const bool Date::SetDOM(const int days)
 //------------------------------------------------
 const bool Date::SetMonth(const int months)
 {
-   bool ok = false;
-   if(months >= T_MONTH_MIN && months <= T_MONTH_MAX)
+   if(months < T_MONTH_MIN || months > T_MONTH_MAX)
    {
-      m_tmObj.tm_mon = months - 1;
-      m_time=mktime(&m_tmObj);
-      ok=true;
+      return false;
    }
-   return ok;
+   struct tm tmTime = m_tmObj;
+   tmTime.tm_mon = months - 1;
+   return MakeLocalTime(tmTime, m_tmObj, m_time);
 }
 
 //------------------------------------------------
@@ -866,14 +993,13 @@ const bool Date::SetMonth(const int months)
 //------------------------------------------------
 const bool Date::SetYear(const int years)
 {
-   bool ok = false;
-   if(years >= T_YEAR_MIN && years <= T_YEAR_MAX)
+   if(years < T_YEAR_MIN || years > T_YEAR_MAX)
    {
-      m_tmObj.tm_year = years - 1900;
-      m_time=mktime(&m_tmObj);
-      ok=true;
+      return false;
    }
-   return ok;
+   struct tm tmTime = m_tmObj;
+   tmTime.tm_year = years - 1900;
+   return MakeLocalTime(tmTime, m_tmObj, m_time);
 }
 
 //------------------------------------------------
@@ -944,6 +1070,18 @@ const Date Date::Cron(int lSecOffset,
 //------------------------------------------------
 const Date Date::CronFromLists(const set<int> lists[COMBO_COUNT],
                                bool isISC, bool domStar, bool dowStar) const
+{
+   return Date(NextTime(lists, isISC, domStar, dowStar, m_time, NULL));
+}
+
+//------------------------------------------------
+//
+//  Function: NextTime
+//
+//------------------------------------------------
+time_t Date::NextTime(const set<int> lists[COMBO_COUNT], bool isISC,
+                      bool domStar, bool dowStar, time_t after,
+                      const TimeZone* zone)
 {
    // Each field is a bit mask of the values it allows
    const int lows[COMBO_DRIFT] = {
@@ -1030,13 +1168,13 @@ const Date Date::CronFromLists(const set<int> lists[COMBO_COUNT],
    while (end != drifts.begin())
    {
       time_t largest = *(end - 1);
-      if (m_time < lowest + largest)
+      if (after < lowest + largest)
          throw runtime_error("The reference time is out of range.");
-      time_t match = NextMatch(s, m_time - largest);
+      time_t match = NextMatch(s, after - largest, zone);
 
       // The smallest drift that still lands after now
       vector<time_t>::iterator use =
-         upper_bound(drifts.begin(), end, m_time - match);
+         upper_bound(drifts.begin(), end, after - match);
       if (match > highest - *use)
          throw runtime_error("The matching time is out of range.");
       time_t when = match + *use;
@@ -1047,11 +1185,15 @@ const Date Date::CronFromLists(const set<int> lists[COMBO_COUNT],
       }
 
       // Nothing can be sooner than the very next second
-      if (best == m_time + 1)
+      if (best == after + 1)
          break;
       end = use;
    }
-   return Date(best);
+
+   struct tm check;
+   if (!ZoneLocal(zone, best, check))
+      throw runtime_error("The matching time is out of range.");
+   return best;
 }
 
 //------------------------------------------------
@@ -1067,29 +1209,28 @@ bool Date::CronValid(const string& sSecOffset,
                      const string& sDowOffset,
                      const string& sDriftOffset)
 {
-   static Date tmpDate;
    // Calculate Possible Combinations
    set<int> comboList[COMBO_COUNT]; // Build Combination List
    return(
-         tmpDate.ParseCronString(
+         ParseCronString(
             sSecOffset,
             comboList[COMBO_SEC],T_SEC_MIN,T_SEC_MAX) &&
-         tmpDate.ParseCronString(
+         ParseCronString(
             sMinOffset,
             comboList[COMBO_MIN],T_MIN_MIN,T_MIN_MAX) &&
-         tmpDate.ParseCronString(
+         ParseCronString(
             sHourOffset,
             comboList[COMBO_HOUR],T_HOUR_MIN,T_HOUR_MAX) &&
-         tmpDate.ParseCronString(
+         ParseCronString(
             sDomOffset,
             comboList[COMBO_DOM],T_DOM_MIN,T_DOM_MAX) &&
-         tmpDate.ParseCronString(
+         ParseCronString(
             sMonthOffset,
             comboList[COMBO_MONTH],T_MONTH_MIN,T_MONTH_MAX) &&
-         tmpDate.ParseCronString(
+         ParseCronString(
             sDowOffset,
             comboList[COMBO_DOW],T_DOW_MIN,T_DOW_MAX) &&
-         tmpDate.ParseCronString(
+         ParseCronString(
             sDriftOffset,
             comboList[COMBO_DRIFT],T_DRIFT_MIN,T_DRIFT_MAX));
 }
@@ -1203,6 +1344,35 @@ const Date Date::Cron(const string& strIn, bool isISC) const
    //     -  -  -  -  -
    //     *  *  *  *  *
 
+   set<int> comboList[COMBO_COUNT];
+   bool domStar, dowStar;
+   ParseCron(strIn, isISC, comboList, domStar, dowStar);
+   return CronFromLists(comboList, isISC, domStar, dowStar);
+}
+
+//------------------------------------------------
+//
+//  Function: CronAfter
+//
+//------------------------------------------------
+time_t Date::CronAfter(time_t after, const string& strIn, bool isISC,
+                       const TimeZone& zone)
+{
+   set<int> comboList[COMBO_COUNT];
+   bool domStar, dowStar;
+   ParseCron(strIn, isISC, comboList, domStar, dowStar);
+   return NextTime(comboList, isISC, domStar, dowStar, after, &zone);
+}
+
+//------------------------------------------------
+//
+//  Function: ParseCron
+//
+//------------------------------------------------
+void Date::ParseCron(const string& strIn, bool isISC,
+                     set<int> comboList[COMBO_COUNT],
+                     bool& domStar, bool& dowStar)
+{
    vector<string> v_tokens;
    if (!SplitCronString(strIn, isISC, v_tokens))
    {
@@ -1225,12 +1395,20 @@ const Date Date::Cron(const string& strIn, bool isISC) const
 
    if (!isISC)
    {
-      return Cron(v_tokens[0], v_tokens[1], v_tokens[2], v_tokens[3],
-                  v_tokens[4], v_tokens[5], v_tokens[6]);
+      const int lows[COMBO_COUNT] = {
+         T_SEC_MIN, T_MIN_MIN, T_HOUR_MIN, T_DOM_MIN,
+         T_MONTH_MIN, T_DOW_MIN, T_DRIFT_MIN };
+      const int highs[COMBO_COUNT] = {
+         T_SEC_MAX, T_MIN_MAX, T_HOUR_MAX, T_DOM_MAX,
+         T_MONTH_MAX, T_DOW_MAX, T_DRIFT_MAX };
+      for (int i = 0; i < COMBO_COUNT; i++)
+         if (!ParseCronString(v_tokens[i], comboList[i], lows[i], highs[i]))
+            throw invalid_argument("The cron is not formatted correctly.");
+      domStar = dowStar = true;
+      return;
    }
 
    // ISC: no seconds or drift field
-   set<int> comboList[COMBO_COUNT];
    comboList[COMBO_SEC].insert(T_NO_ENTRY);
    comboList[COMBO_DRIFT].insert(T_NO_ENTRY);
    if (!(ParseCronString(v_tokens[0],comboList[COMBO_MIN],
@@ -1247,16 +1425,17 @@ const Date Date::Cron(const string& strIn, bool isISC) const
       throw invalid_argument("The cron is not formatted correctly.");
    }
    // crontab(5) treats a day field starting with '*' as unrestricted
-   return CronFromLists(comboList, true,
-                        v_tokens[2][0] == '*', v_tokens[4][0] == '*');
+   domStar = (v_tokens[2][0] == '*');
+   dowStar = (v_tokens[4][0] == '*');
 }
 
 bool Date::ParseCronString(const string& strIn, set<int> &comboListOut,
                              int minVal, int maxVal,
-                             bool stepFromLowest) const
+                             bool stepFromLowest)
 {
    // Each comma separated entry is one of:
-   //   *            any value
+   //   *            any value (on its own only; '*,5' is unclear, so it
+   //                is refused)
    //   x            a value
    //   x-y (y-x)    every value from x to y
    //   x-y/z        every z'th value from x to y
@@ -1268,8 +1447,15 @@ bool Date::ParseCronString(const string& strIn, set<int> &comboListOut,
                           strIn.find(",,") != string::npos))
       return false;
 
+   // More entries than a field can ever hold (ie: '0,0,0,...' repeated a
+   // million times) are refused before anything is stored
+   if (count(strIn.begin(), strIn.end(), ',') >= CRON_MAX_FIELD_VALUES)
+      return false;
+
    vector<string> tokens;
    Tokenize(strIn, ',', tokens);
+   if (tokens.size() > 1 && find(tokens.begin(), tokens.end(), "*") != tokens.end())
+      return false;
 
    for (vector<string>::const_iterator itr = tokens.begin();
         itr != tokens.end(); itr++)
@@ -1320,8 +1506,8 @@ bool Date::ParseCronString(const string& strIn, set<int> &comboListOut,
          return false;
 
       // Refuse lists that would take up an absurd amount of memory
-      long long count = (last - first) / step + 1;
-      if (count + (long long)comboListOut.size() > CRON_MAX_FIELD_VALUES)
+      long long added = (last - first) / step + 1;
+      if (added + (long long)comboListOut.size() > CRON_MAX_FIELD_VALUES)
          return false;
 
       for (long long value = first; value <= last; value += step)
@@ -1337,7 +1523,7 @@ bool Date::ParseCronString(const string& strIn, set<int> &comboListOut,
 
 size_t Date::Tokenize(const string& strIn,
                 char delimiter,
-                vector<string> &tokens) const
+                vector<string> &tokens)
 {
    size_t startPos = 0;
    tokens.clear();
@@ -1371,30 +1557,36 @@ size_t Date::Tokenize(const string& strIn,
 //------------------------------------------------
 unsigned long Date::BlockUntil(const Date& until)
 {
+   return BlockUntil(until.Time());
+}
+
+unsigned long Date::BlockUntil(time_t until)
+{
 #if !defined(_WIN32) && !defined(__APPLE__)
    struct timespec target;
-   target.tv_sec = until.Time();
+   target.tv_sec = until;
    target.tv_nsec = 0;
 
    int rc = clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME, &target, NULL);
-   if (rc == EINTR)
+   if (rc == 0 || rc == EINTR)
    {
-      // A signal woke us up early; report how long is left
-      return SecondsLeft(until.Time(), Now());
+      // Done, or a signal woke us up early; report how long is left
+      return SecondsLeft(until, Now());
    }
-   return 0;
-#else
+   // Any other error: fall back to sleeping a second at a time below
+#endif
+
    // macOS and Windows can't sleep until an exact time, so sleep for
    // whatever is left instead.  Sleep at most a second at a time so that
    // Ctrl-C is noticed quickly; the caller loops until we return 0.
    struct timespec now;
    NowPrecise(now);
-   if (now.tv_sec >= until.Time())
+   if (now.tv_sec >= until)
    {
       return 0;
    }
 
-   double left = (double)(until.Time() - now.tv_sec) - now.tv_nsec / 1e9;
+   double left = (double)(until - now.tv_sec) - now.tv_nsec / 1e9;
    double chunk = (left > 1.0) ? 1.0 : left;
 #ifdef _WIN32
    Sleep((DWORD)(chunk * 1000.0) + 1);
@@ -1405,6 +1597,5 @@ unsigned long Date::BlockUntil(const Date& until)
    nanosleep(&rel, NULL);
 #endif
 
-   return SecondsLeft(until.Time(), Now());
-#endif
+   return SecondsLeft(until, Now());
 }

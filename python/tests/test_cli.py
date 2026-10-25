@@ -20,6 +20,7 @@ import io
 import re
 import time
 import unittest
+from zoneinfo import ZoneInfo
 
 from dateblock import cli
 
@@ -65,7 +66,23 @@ class CommandTests(unittest.TestCase):
     def test_errors_exit_with_one(self):
         self.assertEqual(run("-t", "-c", "* 99")[0], 1)
         self.assertEqual(run("-t", "-c", "0 0 0 31 2 *")[0], 1)
+        self.assertEqual(run("-t", "-c", "0 *,5")[0], 1)
         self.assertEqual(run("-t")[0], 1)
+
+    def test_timezone_reads_the_schedule_there(self):
+        try:
+            ZoneInfo("Asia/Tokyo")
+        except Exception:
+            self.skipTest("no timezone data")
+        code, out, _ = run("-t", "-z", "Asia/Tokyo", "-c", "0 0 9")
+        self.assertEqual(code, 0)
+        self.assertRegex(out, r"Block Until  : \S+ 09:00:00 JST \(")
+
+    def test_unknown_timezone_exits_with_one(self):
+        code, _, err = run("-t", "-z", "Nowhere/Land", "-n", "5")
+        self.assertEqual(code, 1)
+        self.assertIn("Unknown timezone", err)
+        self.assertEqual(run("-t", "-z", "../../etc/passwd", "-n", "5")[0], 1)
 
     def test_bad_command_line_exits_with_255(self):
         self.assertEqual(run("--bogus")[0], 255)

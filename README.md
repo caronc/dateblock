@@ -26,6 +26,9 @@ uv tool install dateblock
 
 # When would the next 5th minute start?  (--test shows without waiting)
 dateblock -t -n /5
+
+# Wait for 9:00 in Tokyo, whatever timezone this computer is in
+dateblock -z Asia/Tokyo -c "0 0 9"
 ```
 
 Packages for Fedora, RHEL/CentOS/Alma/Rocky 9 and 10, Debian and Arch Linux
@@ -48,6 +51,8 @@ __Allowed options__:
   -w [ --dow ] arg      Day of Week (0-6) {Sun=0,...,Sat=6}
   -c [ --cron ] arg     Cron string formatting
   -x [ --drift ] arg    Additional drift time (in seconds).
+  -z [ --timezone ] arg Timezone to read the schedule in (ie:
+                        America/Toronto); defaults to this computer's.
 ```
 
 A variety of syntax is accepted by this tool such as:
@@ -61,7 +66,8 @@ A variety of syntax is accepted by this tool such as:
 __Note__: With the exception of the drift option (+), all variations of the syntax
       mentioned above can be mixed if separated using the 'comma' (Separator)
       operator.  ie: */a,b,c-d,/e is valid.
-      However: x-y-z is not valid, nor is /x/y or /x-y. All values must be
+      However: x-y-z is not valid, nor is /x/y, /x-y or a '*' mixed with
+      other entries (ie: *,5). All values must be
       within the range of it's time type. Thus 400-4000 would never work since
       no time constraint even resides within that range.
 
@@ -102,6 +108,19 @@ and test your crons to find out when they __would have__ blocked until without
 actually blocking.  If you pair the the test with the __--ics__ (__-i__), then
 you can use this tool to help construct regular crons for _/etc/crontab_ if
 you're new to the idea and still learning how the crontabs work.
+
+### Timezones:
+The schedule is read in this computer's timezone unless __--timezone__
+(__-z__) names another one from the timezone database (such as
+`America/Toronto` or `Asia/Tokyo`). Daylight saving follows that timezone,
+and dateblock unblocks at that exact moment no matter where the computer
+is. The times shown by __--test__ and __--verbose__ are in that timezone too.
+```bash
+# 9:00 in Tokyo
+dateblock -t -z Asia/Tokyo -c "0 0 9"
+Current Time : 2026-10-24 22:05:00 JST (Sat)
+Block Until  : 2026-10-25 09:00:00 JST (Sun)
+```
 
 ### Drifting:
 Drifting is an option that allows you to adjust the calculated results by some
@@ -238,11 +257,21 @@ result = dateblock("/5", ref=time(10, 5, 0))
 
 # Epoch: seconds
 result = dateblock("/5", ref=13424236)
+
+# Timezones: an aware datetime (or time) reads the cron in its own
+# timezone, and the result comes back in that same timezone.  This waits
+# for 9:00 in Tokyo, whatever timezone this computer is in.
+from zoneinfo import ZoneInfo
+tokyo = ZoneInfo("Asia/Tokyo")
+result = dateblock("0 0 9", ref=datetime.now(tokyo))
 ```
 
 A few things worth knowing:
-- Results are returned as a (naive) `datetime` in local time. Timezone aware
-  `ref` values are converted to local time first.
+- A naive `ref` (or none, a `date`, epoch or `timedelta`) uses this
+  computer's timezone and returns a naive `datetime`.
+- A timezone aware `ref` uses its own timezone, including its daylight
+  saving rules, and returns an aware `datetime` with the same `tzinfo`.
+  Blocking always ends at that exact moment.
 - An invalid cron string raises `SyntaxError`; a cron that can never happen
   (such as February 31st) raises `ValueError`.
 - While blocking, other Python threads keep running and Ctrl-C

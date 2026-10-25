@@ -3,8 +3,8 @@ dateblock(1) -- block (sleep) until a cron-style moment in time
 
 ## SYNOPSIS
 
-`dateblock` [`-t`] [`-v`] `-c` <CRON> [`-i`]<br>
-`dateblock` [`-t`] [`-v`] [`-s` <SEC>] [`-n` <MIN>] [`-o` <HOUR>] [`-d` <DOM>] [`-m` <MONTH>] [`-w` <DOW>] [`-x` <DRIFT>]<br>
+`dateblock` [`-t`] [`-v`] [`-z` <ZONE>] `-c` <CRON> [`-i`]<br>
+`dateblock` [`-t`] [`-v`] [`-z` <ZONE>] [`-s` <SEC>] [`-n` <MIN>] [`-o` <HOUR>] [`-d` <DOM>] [`-m` <MONTH>] [`-w` <DOW>] [`-x` <DRIFT>]<br>
 `dateblock` `-h`
 
 ## DESCRIPTION
@@ -43,6 +43,12 @@ Use `--test` to see when **dateblock** would unblock without waiting.
   Read the `--cron` string as a regular 5 field crontab(5) entry (minute,
   hour, day of month, month, day of week) with no second or drift fields.
   ISC stands for the Internet Systems Consortium cron.
+
+  `-z`, `--timezone=`<ZONE>:
+  Read the schedule in timezone <ZONE> (a name from the timezone database,
+  such as `America/Toronto` or `Asia/Tokyo`) instead of this computer's
+  own; see [TIMEZONES][]. The times shown by `--test` and `--verbose` are
+  in that timezone too.
 
   `-s`, `--second=`<SEC>:
   The second(s) to unblock on (0-59).
@@ -89,10 +95,11 @@ Every field (and every entry in a cron string) accepts:
   * `x,y`:
     both _x_ and _y_ (separator).
   * `*`:
-    any value.
+    any value. It must be on its own; `*,5` is not valid.
 
 These can be mixed when separated by commas, so `*/a,b,c-d,/e` is valid.
-However `x-y-z`, `/x/y`, `/x-y` and an unfinished `x-` are not. Every value
+However `x-y-z`, `/x/y`, `/x-y`, an unfinished `x-`, an empty entry
+(`5,,6`) and a `*` mixed with other entries are not. Every value
 must be within the range of its field; `400-4000` never works for any field.
 
 ## CRON STRING
@@ -135,6 +142,18 @@ It works the same as a crontab(5) entry does:
   * `*/x` counts from the field's lowest value, so a day of month of `*/5`
     is the 1st, 6th, 11th and so on (without `--isc` it is the 5th, 10th,
     15th and so on).
+
+## TIMEZONES
+
+The schedule is read in this computer's timezone (the `TZ` environment
+variable, or the system setting), unless `--timezone` names another one.
+
+  * Daylight saving follows that timezone. A time skipped when the clocks
+    go forward (such as 2:30 in most of North America on the second Sunday
+    of March) does not happen that day, and a time repeated when they go
+    back matches the first time it comes around.
+  * **dateblock** unblocks at that exact moment, no matter which timezone
+    the computer itself is in.
 
 ## DRIFTING
 
@@ -185,6 +204,13 @@ Block until 9:00 on weekdays, written as a regular crontab entry:
 
     $ dateblock -i -c "0 9 * * 1-5"
 
+Block until 9:00 in Tokyo, whatever timezone this computer is in:
+
+    $ dateblock -z Asia/Tokyo -c "0 0 9"
+    $ dateblock -t -z Asia/Tokyo -c "0 0 9"
+    Current Time : 2026-10-24 22:05:00 JST (Sat)
+    Block Until  : 2026-10-25 09:00:00 JST (Sun)
+
 See when a schedule would next run, without waiting:
 
     $ dateblock -t -c "0 30 2 * * 0"
@@ -200,8 +226,8 @@ Run a command every 15 minutes, on the quarter hour:
   * `0`:
     The matching time was reached (or, with `--test`, was worked out).
   * `1`:
-    No options were given, the schedule is not valid, or no matching time
-    exists (such as the 31st of February). A schedule counts as impossible
+    No options were given, the schedule is not valid, the `--timezone` is
+    unknown, or no matching time exists (such as the 31st of February). A schedule counts as impossible
     when nothing matches within the next 400 years, the length of time it
     takes the calendar to repeat itself.
   * `255`:

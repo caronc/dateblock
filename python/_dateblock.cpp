@@ -26,15 +26,16 @@
 #include <stdexcept>
 #include "Date.h"
 
-// Fills in 'out' from a Python reference value:
+// Fills in 'out' from a naive Python reference value (timezone aware
+// ones go through CronInZone() instead):
 //  - None:               now
-//  - datetime:           as is (timezone aware values are converted to
-//                        local time)
+//  - datetime:           as is
 //  - date:               midnight of that day
 //  - time:               that time, today
 //  - timedelta:          offset from now
 //  - int or float:       seconds since the epoch
 // Returns false (with a TypeError set) for anything else.
+// Throws std::out_of_range for a moment that can't be a local date.
 static bool PyToDate(PyObject *obj, Date &out)
 {
    out.Set();
@@ -45,32 +46,6 @@ static bool PyToDate(PyObject *obj, Date &out)
 
    if (PyDateTime_Check(obj))
    {
-      PyObject *tzinfo = PyObject_GetAttrString(obj, "tzinfo");
-      if (tzinfo == NULL)
-      {
-         return false;
-      }
-      bool aware = (tzinfo != Py_None);
-      Py_DECREF(tzinfo);
-
-      if (aware)
-      {
-         // Let Python work out the exact moment, then view it locally
-         PyObject *ts = PyObject_CallMethod(obj, "timestamp", NULL);
-         if (ts == NULL)
-         {
-            return false;
-         }
-         double epoch = PyFloat_AsDouble(ts);
-         Py_DECREF(ts);
-         if (epoch == -1.0 && PyErr_Occurred())
-         {
-            return false;
-         }
-         out.Set((time_t) floor(epoch));
-         return true;
-      }
-
       out.Set(PyDateTime_GET_YEAR(obj),
               PyDateTime_GET_MONTH(obj),
               PyDateTime_GET_DAY(obj),
@@ -130,11 +105,13 @@ static bool PyToDate(PyObject *obj, Date &out)
 
    if (PyFloat_Check(obj))
    {
-      // NaN, infinity and huge values can't be turned into a time_t
+      // NaN, infinity and huge values can't be turned into a time_t.  The
+      // largest time_t rounds up to 2**63 as a double, which itself
+      // doesn't fit, hence '>='.
       double epoch = floor(PyFloat_AS_DOUBLE(obj));
       if (!isfinite(epoch) ||
           epoch < (double) std::numeric_limits<time_t>::min() ||
-          epoch > (double) std::numeric_limits<time_t>::max())
+          epoch >= (double) std::numeric_limits<time_t>::max())
       {
          PyErr_SetString(PyExc_OverflowError,
                "ref is outside of the supported time range.");
@@ -161,6 +138,204 @@ static PyObject *DateToPy(const Date &date)
                                      0);
 }
 
+// A Python tzinfo, seen through the engine's Date::TimeZone hook.
+//  - The local time comes from datetime.fromtimestamp(t, tzinfo), so any
+//    tzinfo works (zoneinfo, datetime.timezone, dateutil, pytz) and its
+//    own daylight saving rules are used.
+//  - Only use it while holding the GIL.
+//  - A Python error stops the search and stays set so it can be raised.
+class PyZone : public Date::TimeZone
+{
+   public:
+     PyZone(PyObject *tzinfo) : m_tzinfo(tzinfo) {}
+
+     bool ToLocal(time_t t, struct tm& tmOut) const
+     {
+        if (PyErr_Occurred())
+        {
+           return false;
+        }
+        PyObject *dt = PyObject_CallMethod(
+              (PyObject *) PyDateTimeAPI->DateTimeType, "fromtimestamp",
+              "LO", (long long) t, m_tzinfo);
+        if (dt == NULL)
+        {
+           return false;
+        }
+        tmOut.tm_year = PyDateTime_GET_YEAR(dt) - 1900;
+        tmOut.tm_mon = PyDateTime_GET_MONTH(dt) - 1;
+        tmOut.tm_mday = PyDateTime_GET_DAY(dt);
+        tmOut.tm_hour = PyDateTime_DATE_GET_HOUR(dt);
+        tmOut.tm_min = PyDateTime_DATE_GET_MINUTE(dt);
+        tmOut.tm_sec = PyDateTime_DATE_GET_SECOND(dt);
+        Py_DECREF(dt);
+        return true;
+     }
+
+   private:
+     PyObject *m_tzinfo;
+};
+
+// Turns the C++ exception being handled into a Python one.  Call it from
+// inside a catch block.  A Python error that is already set (ie: raised
+// by a tzinfo) is kept as it is.
+static void SetCronError()
+{
+   try
+   {
+      throw;
+   }
+   catch (const std::invalid_argument &)
+   {
+      if (!PyErr_Occurred())
+         PyErr_SetString(PyExc_SyntaxError,
+               "The cron specified is not formatted correctly.");
+   }
+   catch (const std::out_of_range &)
+   {
+      if (!PyErr_Occurred())
+         PyErr_SetString(PyExc_OverflowError,
+               "ref is outside of the supported time range.");
+   }
+   catch (const std::runtime_error &e)
+   {
+      if (!PyErr_Occurred())
+         PyErr_Format(PyExc_ValueError,
+               "No date/time matches the cron specified (%s).", e.what());
+   }
+   catch (const std::bad_alloc &)
+   {
+      PyErr_NoMemory();
+   }
+   catch (const std::exception &e)
+   {
+      if (!PyErr_Occurred())
+         PyErr_SetString(PyExc_RuntimeError, e.what());
+   }
+}
+
+// The next match for a naive reference (or none), read in the computer's
+// own timezone.  Returns a naive datetime and sets 'when', or NULL with
+// an error set.
+static PyObject *CronLocal(const char *cron, bool isc, PyObject *ref,
+                           time_t &when)
+{
+   // A C++ exception must never reach Python; it would abort the
+   // interpreter
+   Date dObjFinish;
+   try
+   {
+      Date dObjStart;
+      if (!PyToDate(ref, dObjStart))
+      {
+         return NULL;
+      }
+      dObjFinish = dObjStart.Cron(cron, isc);
+   }
+   catch (...)
+   {
+      SetCronError();
+      return NULL;
+   }
+   when = dObjFinish.Time();
+   return DateToPy(dObjFinish);
+}
+
+// The next match for a timezone aware datetime, read in its own timezone.
+// Returns an aware datetime (with the same tzinfo) and sets 'when', or
+// NULL with an error set.
+static PyObject *CronInZone(const char *cron, bool isc, PyObject *ref,
+                            PyObject *tzinfo, time_t &when)
+{
+   PyObject *ts = PyObject_CallMethod(ref, "timestamp", NULL);
+   if (ts == NULL)
+   {
+      return NULL;
+   }
+   double epoch = floor(PyFloat_AsDouble(ts));
+   Py_DECREF(ts);
+   if (PyErr_Occurred())
+   {
+      return NULL;
+   }
+
+   try
+   {
+      PyZone zone(tzinfo);
+      when = Date::CronAfter((time_t) epoch, cron, isc, zone);
+   }
+   catch (...)
+   {
+      SetCronError();
+      return NULL;
+   }
+   return PyObject_CallMethod((PyObject *) PyDateTimeAPI->DateTimeType,
+                              "fromtimestamp", "LO", (long long) when,
+                              tzinfo);
+}
+
+// For a timezone aware datetime or time, returns a new reference to the
+// datetime to start from (a time means that time today, in its own
+// timezone) and sets 'tzinfo' (also a new reference).  Returns NULL with
+// 'tzinfo' NULL for anything else, and NULL with an error set on failure.
+static PyObject *AwareRef(PyObject *ref, PyObject **tzinfo)
+{
+   *tzinfo = NULL;
+   if (ref == NULL || !(PyDateTime_Check(ref) || PyTime_Check(ref)))
+   {
+      return NULL;
+   }
+
+   PyObject *tz = PyObject_GetAttrString(ref, "tzinfo");
+   if (tz == NULL || tz == Py_None)
+   {
+      Py_XDECREF(tz);
+      return NULL;
+   }
+
+   PyObject *start;
+   if (PyTime_Check(ref))
+   {
+      // Today's date over there
+      PyObject *now = PyObject_CallMethod(
+            (PyObject *) PyDateTimeAPI->DateTimeType, "now", "O", tz);
+      PyObject *day = now ? PyObject_CallMethod(now, "date", NULL) : NULL;
+      start = day ? PyObject_CallMethod(
+            (PyObject *) PyDateTimeAPI->DateTimeType, "combine", "OO",
+            day, ref) : NULL;
+      Py_XDECREF(day);
+      Py_XDECREF(now);
+   }
+   else
+   {
+      Py_INCREF(ref);
+      start = ref;
+   }
+   if (start == NULL)
+   {
+      Py_DECREF(tz);
+      return NULL;
+   }
+
+   // A tzinfo that gives no offset means the value is naive after all
+   PyObject *offset = PyObject_CallMethod(start, "utcoffset", NULL);
+   if (offset == NULL || offset == Py_None)
+   {
+      Py_XDECREF(offset);
+      Py_DECREF(tz);
+      if (PyErr_Occurred() || start == ref)
+      {
+         Py_DECREF(start);
+         return NULL;
+      }
+      // An aware time with an odd tzinfo; carry on with today's naive time
+      return start;
+   }
+   Py_DECREF(offset);
+   *tzinfo = tz;
+   return start;
+}
+
 PyDoc_STRVAR(dateblock_doc,
 "dateblock(cron, block=True, ref=None, isc=False)\n"
 "--\n\n"
@@ -169,10 +344,12 @@ PyDoc_STRVAR(dateblock_doc,
 "         or a regular crontab string when isc=True.\n"
 "- block: set to False to only work out the time (no sleeping).\n"
 "- ref:   calculate relative to this datetime, date, time, timedelta\n"
-"         or epoch value\n"
-"         instead of now.\n"
+"         or epoch value instead of now.\n"
 "- isc:   treat the cron string as a regular 5 field crontab entry.\n\n"
-"Returns the matching moment as a datetime (in local time).");
+"A timezone aware datetime or time as ref reads the cron in its own\n"
+"timezone (with its daylight saving rules) and returns an aware datetime\n"
+"in that same timezone.  Anything else uses this computer's timezone and\n"
+"returns a naive datetime.  Either way it unblocks at that exact moment.");
 
 // Block for a specified cron period and return the date calculated.
 // Pass block=False to just perform the calculation.
@@ -192,45 +369,28 @@ static PyObject *dateblock(PyObject *self, PyObject *args, PyObject *kwds)
       return NULL;
    }
 
-   // Reference Time (defaults to now)
-   Date dObjStart;
-   if (!PyToDate(pDateObj, dObjStart))
+   // Work out the moment (and build the result first; a moment Python
+   // can't represent, past the year 9999, raises right away instead of
+   // after sleeping until then)
+   time_t when = 0;
+   PyObject *tzinfo = NULL;
+   PyObject *start = AwareRef(pDateObj, &tzinfo);
+   if (start == NULL && PyErr_Occurred())
    {
       return NULL;
    }
 
-   // A C++ exception must never reach Python; it would abort the
-   // interpreter
-   Date dObjFinish;
-   try
+   PyObject *result;
+   if (tzinfo != NULL)
    {
-      dObjFinish = dObjStart.Cron(str, isc != 0);
+      result = CronInZone(str, isc != 0, start, tzinfo, when);
    }
-   catch (const std::invalid_argument &)
+   else
    {
-      PyErr_SetString(PyExc_SyntaxError,
-            "The cron specified is not formatted correctly.");
-      return NULL;
+      result = CronLocal(str, isc != 0, start ? start : pDateObj, when);
    }
-   catch (const std::runtime_error &e)
-   {
-      PyErr_Format(PyExc_ValueError,
-            "No date/time matches the cron specified (%s).", e.what());
-      return NULL;
-   }
-   catch (const std::bad_alloc &)
-   {
-      return PyErr_NoMemory();
-   }
-   catch (const std::exception &e)
-   {
-      PyErr_SetString(PyExc_RuntimeError, e.what());
-      return NULL;
-   }
-
-   // Build the result first; a moment Python can't represent (past the
-   // year 9999) raises right away instead of after sleeping until then
-   PyObject *result = DateToPy(dObjFinish);
+   Py_XDECREF(start);
+   Py_XDECREF(tzinfo);
    if (result == NULL)
    {
       return NULL;
@@ -246,7 +406,7 @@ static PyObject *dateblock(PyObject *self, PyObject *args, PyObject *kwds)
       {
          unsigned long left;
          Py_BEGIN_ALLOW_THREADS
-         left = Date::BlockUntil(dObjFinish);
+         left = Date::BlockUntil(when);
          Py_END_ALLOW_THREADS
 
          if (left == 0)

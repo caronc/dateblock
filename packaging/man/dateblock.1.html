@@ -59,6 +59,7 @@
     <a href="#OPTIONS">OPTIONS</a>
     <a href="#FIELD-SYNTAX">FIELD SYNTAX</a>
     <a href="#CRON-STRING">CRON STRING</a>
+    <a href="#TIMEZONES">TIMEZONES</a>
     <a href="#DRIFTING">DRIFTING</a>
     <a href="#EXAMPLES">EXAMPLES</a>
     <a href="#EXIT-STATUS">EXIT STATUS</a>
@@ -83,8 +84,8 @@
 </p>
 <h2 id="SYNOPSIS">SYNOPSIS</h2>
 
-<p><code>dateblock</code> [<code>-t</code>] [<code>-v</code>] <code>-c</code> <var>CRON</var> [<code>-i</code>]<br>
-<code>dateblock</code> [<code>-t</code>] [<code>-v</code>] [<code>-s</code> <var>SEC</var>] [<code>-n</code> <var>MIN</var>] [<code>-o</code> <var>HOUR</var>] [<code>-d</code> <var>DOM</var>] [<code>-m</code> <var>MONTH</var>] [<code>-w</code> <var>DOW</var>] [<code>-x</code> <var>DRIFT</var>]<br>
+<p><code>dateblock</code> [<code>-t</code>] [<code>-v</code>] [<code>-z</code> <var>ZONE</var>] <code>-c</code> <var>CRON</var> [<code>-i</code>]<br>
+<code>dateblock</code> [<code>-t</code>] [<code>-v</code>] [<code>-z</code> <var>ZONE</var>] [<code>-s</code> <var>SEC</var>] [<code>-n</code> <var>MIN</var>] [<code>-o</code> <var>HOUR</var>] [<code>-d</code> <var>DOM</var>] [<code>-m</code> <var>MONTH</var>] [<code>-w</code> <var>DOW</var>] [<code>-x</code> <var>DRIFT</var>]<br>
 <code>dateblock</code> <code>-h</code></p>
 
 <h2 id="DESCRIPTION">DESCRIPTION</h2>
@@ -126,6 +127,12 @@ foreground: it returns the moment the schedule is next matched.</p>
   Read the <code>--cron</code> string as a regular 5 field <span class="man-ref">crontab<span class="s">(5)</span></span> entry (minute,
   hour, day of month, month, day of week) with no second or drift fields.
   ISC stands for the Internet Systems Consortium cron.</p>
+
+<p><code>-z</code>, <code>--timezone=</code><var>ZONE</var>:
+  Read the schedule in timezone <var>ZONE</var> (a name from the timezone database,
+  such as <code>America/Toronto</code> or <code>Asia/Tokyo</code>) instead of this computer's
+  own; see <a href="#TIMEZONES" title="TIMEZONES" data-bare-link="true">TIMEZONES</a>. The times shown by <code>--test</code> and <code>--verbose</code> are
+  in that timezone too.</p>
 
 <p><code>-s</code>, <code>--second=</code><var>SEC</var>:
   The second(s) to unblock on (0-59).</p>
@@ -175,11 +182,12 @@ match: <code>-d 13 -w 5</code> is every Friday the 13th.</p>
 <dt><code>x,y</code></dt>
 <dd>both <em>x</em> and <em>y</em> (separator).</dd>
 <dt><code>*</code></dt>
-<dd>any value.</dd>
+<dd>any value. It must be on its own; <code>*,5</code> is not valid.</dd>
 </dl>
 
 <p>These can be mixed when separated by commas, so <code>*/a,b,c-d,/e</code> is valid.
-However <code>x-y-z</code>, <code>/x/y</code>, <code>/x-y</code> and an unfinished <code>x-</code> are not. Every value
+However <code>x-y-z</code>, <code>/x/y</code>, <code>/x-y</code>, an unfinished <code>x-</code>, an empty entry
+(<code>5,,6</code>) and a <code>*</code> mixed with other entries are not. Every value
 must be within the range of its field; <code>400-4000</code> never works for any field.</p>
 
 <h2 id="CRON-STRING">CRON STRING</h2>
@@ -226,6 +234,21 @@ one may match: <code>0 0 1 * 1</code> is the 1st of every month and every Monday
 <code>*/x</code> counts from the field's lowest value, so a day of month of <code>*/5</code>
 is the 1st, 6th, 11th and so on (without <code>--isc</code> it is the 5th, 10th,
 15th and so on).</li>
+</ul>
+
+<h2 id="TIMEZONES">TIMEZONES</h2>
+
+<p>The schedule is read in this computer's timezone (the <code>TZ</code> environment
+variable, or the system setting), unless <code>--timezone</code> names another one.</p>
+
+<ul>
+  <li>Daylight saving follows that timezone. A time skipped when the clocks
+go forward (such as 2:30 in most of North America on the second Sunday
+of March) does not happen that day, and a time repeated when they go
+back matches the first time it comes around.</li>
+  <li>
+<strong>dateblock</strong> unblocks at that exact moment, no matter which timezone
+the computer itself is in.</li>
 </ul>
 
 <h2 id="DRIFTING">DRIFTING</h2>
@@ -285,6 +308,14 @@ $ dateblock -c "* 5 +20"
 <pre><code>$ dateblock -i -c "0 9 * * 1-5"
 </code></pre>
 
+<p>Block until 9:00 in Tokyo, whatever timezone this computer is in:</p>
+
+<pre><code>$ dateblock -z Asia/Tokyo -c "0 0 9"
+$ dateblock -t -z Asia/Tokyo -c "0 0 9"
+Current Time : 2026-10-24 22:05:00 JST (Sat)
+Block Until  : 2026-10-25 09:00:00 JST (Sun)
+</code></pre>
+
 <p>See when a schedule would next run, without waiting:</p>
 
 <pre><code>$ dateblock -t -c "0 30 2 * * 0"
@@ -303,8 +334,8 @@ Block Until  : 2026-10-25 02:30:00 (Sun)
 <dt><code>0</code></dt>
 <dd>The matching time was reached (or, with <code>--test</code>, was worked out).</dd>
 <dt><code>1</code></dt>
-<dd>No options were given, the schedule is not valid, or no matching time
-exists (such as the 31st of February). A schedule counts as impossible
+<dd>No options were given, the schedule is not valid, the <code>--timezone</code> is
+unknown, or no matching time exists (such as the 31st of February). A schedule counts as impossible
 when nothing matches within the next 400 years, the length of time it
 takes the calendar to repeat itself.</dd>
 <dt><code>255</code></dt>

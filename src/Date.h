@@ -27,6 +27,19 @@
 class Date
 {
    public:
+     // Lets Cron work in a timezone other than the computer's own (see
+     // CronAfter() below).
+     //  - ToLocal() fills in tm_year, tm_mon, tm_mday, tm_hour, tm_min and
+     //    tm_sec (as localtime() would) for the moment 't'.
+     //  - It returns false if it can't; the cron search then gives up.
+     //  - The day of the week is worked out for you.
+     class TimeZone
+     {
+        public:
+          virtual ~TimeZone() {}
+          virtual bool ToLocal(time_t t, struct tm& tmOut) const = 0;
+     };
+
      // Some Min/Max Restrictions
      static const int T_SEC_MIN;
      static const int T_SEC_MAX;
@@ -53,6 +66,10 @@ class Date
      // both seconds and drift)
      static const int DBL_CRON_FIELD_COUNT;
 
+     // The constructors, Set() and '=' throw std::out_of_range for a
+     // moment that can't be shown as a local date (ie: a time_t hundreds
+     // of millions of years away).  The Add*() and Set*() functions below
+     // return false instead and leave the date as it was.
      Date();
      Date(int year,
           int month = 1,
@@ -214,6 +231,14 @@ class Date
      const Date Cron(const std::string& sCronStr="*  *  *  *  *  *  *",
                      bool isISC = false) const;
 
+     // The same as Cron() above, but read in 'zone' instead of the
+     // computer's own timezone.
+     //  - 'after' and the result are seconds since the epoch, so they mean
+     //    the same moment everywhere.
+     //  - Daylight saving follows 'zone'.
+     static time_t CronAfter(time_t after, const std::string& sCronStr,
+                             bool isISC, const TimeZone& zone);
+
      // Sleeps until the wall clock reaches 'until'.
      //  - Returns 0 once that moment arrives (or right away if it has
      //    already passed).
@@ -221,6 +246,7 @@ class Date
      //    to keep waiting.  This happens when a signal wakes us up early,
      //    and (on macOS and Windows) after every second of sleep.
      static unsigned long BlockUntil(const Date& until);
+     static unsigned long BlockUntil(time_t until);
 
    private:
      struct tm m_tmObj;
@@ -240,13 +266,20 @@ class Date
       };
 
      // Internal Tool
-     size_t Tokenize(const std::string& strIn, char delimiter,
-                     std::vector<std::string> &tokensOut) const;
+     static size_t Tokenize(const std::string& strIn, char delimiter,
+                            std::vector<std::string> &tokensOut);
 
      // stepFromLowest: '*/x' counts from minVal (crontab) instead of 0
-     bool ParseCronString(const std::string& strIn, std::set<int> &comboListOut,
-                            int minVal, int maxVal,
-                            bool stepFromLowest = false) const;
+     static bool ParseCronString(const std::string& strIn,
+                                 std::set<int> &comboListOut,
+                                 int minVal, int maxVal,
+                                 bool stepFromLowest = false);
+
+     // Splits and parses a whole cron string into its field lists.
+     // Throws std::invalid_argument if it is not formatted correctly.
+     static void ParseCron(const std::string& strIn, bool isISC,
+                           std::set<int> lists[COMBO_COUNT],
+                           bool& domStar, bool& dowStar);
 
      // Finds the next match for fields that were already parsed.
      //  - isISC: read the fields the way a regular crontab(5) does.
@@ -254,6 +287,12 @@ class Date
      //    (only used with isISC).
      const Date CronFromLists(const std::set<int> lists[COMBO_COUNT],
                               bool isISC, bool domStar, bool dowStar) const;
+
+     // The first moment after 'after' matching the lists, in 'zone' (NULL
+     // means the computer's own timezone)
+     static time_t NextTime(const std::set<int> lists[COMBO_COUNT],
+                            bool isISC, bool domStar, bool dowStar,
+                            time_t after, const TimeZone* zone);
 };
 
 inline const time_t Date::Time() const

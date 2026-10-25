@@ -21,6 +21,8 @@
 #include <stdexcept>
 #include <stdlib.h>
 #include <time.h>
+#include <limits>
+#include <string>
 #include "Date.h"
 using namespace std;
 struct plan {
@@ -75,6 +77,31 @@ plan test_plan[] =
    { {2014, 2, 11 , 1, 0, 0 }, {2014, 2, 14 , 0, 0, 0}, {"*", "*", "/2", "*", "*", "*", "45"}, 60}
 };
 
+// The computer's own timezone, through the Date::TimeZone hook.  Every
+// answer must match the regular (mktime() based) search.
+class SystemZone : public Date::TimeZone
+{
+   public:
+     bool ToLocal(time_t t, struct tm& tmOut) const
+     {
+        return localtime_r(&t, &tmOut) != NULL;
+     }
+};
+
+// A timezone a fixed number of seconds ahead of UTC (no daylight saving)
+class FixedZone : public Date::TimeZone
+{
+   public:
+     FixedZone(long offset) : m_offset(offset) {}
+     bool ToLocal(time_t t, struct tm& tmOut) const
+     {
+        time_t shifted = t + m_offset;
+        return gmtime_r(&shifted, &tmOut) != NULL;
+     }
+   private:
+     long m_offset;
+};
+
 /*
  * Smaller one-off checks; returns 0 if they all pass
  */
@@ -103,6 +130,121 @@ static bool Expect(const char *cron, bool isISC, int year, int mon, int day,
    cerr << "FATAL: '" << cron << "'" << (isISC ? " (isc)" : "")
         << " gave '" << got << "', expected '" << expect << "'" << endl;
    return false;
+}
+
+// True if working out 'cron' throws std::invalid_argument
+static bool Refused(const Date& start, const char *cron, bool isISC)
+{
+   try
+   {
+      start.Cron(cron, isISC);
+   }
+   catch (const invalid_argument&)
+   {
+      return true;
+   }
+   cerr << "FATAL: '" << cron << "'" << (isISC ? " (isc)" : "")
+        << " was accepted" << endl;
+   return false;
+}
+
+// Works out 'cron' both ways around each clock change in 'tz' and
+// compares them; returns false (after printing why) if they differ
+static bool SameInZone(const char *tz, int year)
+{
+   setenv("TZ", tz, 1);
+   tzset();
+   const char *crons[] = {
+      "0 0 0", "0 30 2", "0 0 /1", "0 /15 1", "0 0 0 * * 0", "0 0 0 1",
+      "0 30 0 * * *", "0 0 1 8-14 3 0 3600,7200", "/20 59 23",
+      "0 0 2 * * * 1800"};
+   const char *isc[] = {"30 2 * * *", "0 0 * * *", "*/15 0-3 * * 0"};
+   SystemZone zone;
+   for (int month = 1; month <= 12; month++)
+   {
+      // Every 50 minutes for a whole month (lands on every minute-of-hour
+      // offset in steps of 10)
+      Date start(year, month, 1, 0, 0, 0);
+      Date finish(start);
+      finish.AddMonth(1);
+      for (; start < finish; start.AddSec(3000))
+      {
+         for (unsigned c = 0; c < sizeof(crons)/sizeof(crons[0]); c++)
+         {
+            if (Date::CronAfter(start.Time(), crons[c], false, zone) !=
+                  start.Cron(crons[c]).Time())
+            {
+               cerr << "FATAL: " << tz << " '" << crons[c] << "' from "
+                    << start.Str("%F %T %Z") << " differs" << endl;
+               return false;
+            }
+         }
+         for (unsigned c = 0; c < sizeof(isc)/sizeof(isc[0]); c++)
+         {
+            if (Date::CronAfter(start.Time(), isc[c], true, zone) !=
+                  start.Cron(isc[c], true).Time())
+            {
+               cerr << "FATAL: " << tz << " '" << isc[c] << "' (isc) from "
+                    << start.Str("%F %T %Z") << " differs" << endl;
+               return false;
+            }
+         }
+      }
+   }
+   return true;
+}
+
+static int CheckTimeZones()
+{
+   // A fixed +09:00 zone: 09:00 there is 00:00 UTC
+   FixedZone tokyo(9 * 3600);
+   time_t ref = 1735689600;  // 2025-01-01 00:00:00 UTC (09:00 in +09:00)
+   if (Date::CronAfter(ref, "0 0 9", false, tokyo) != ref + 86400 ||
+       Date::CronAfter(ref, "0 0 10", false, tokyo) != ref + 3600 ||
+       Date::CronAfter(ref, "0 9 * * *", true, tokyo) != ref + 86400)
+      return Fail("Cron in a fixed +09:00 zone is wrong");
+
+   // Days, weekdays and leap days follow the zone's calendar, not UTC's:
+   // 2028-02-29 00:00 in +14:00 is still Feb 28th in UTC
+   FixedZone kiribati(14 * 3600);
+   if (Date::CronAfter(ref, "0 0 0 29 2", false, kiribati) !=
+         (time_t)1835395200 - 14 * 3600 ||
+       Date::CronAfter(ref, "0 0 0 * * 1", false, kiribati) !=
+         (time_t)1736121600 - 14 * 3600)
+      return Fail("Days in a +14:00 zone are wrong");
+
+   // Bad syntax still throws
+   bool refused = false;
+   try
+   {
+      Date::CronAfter(ref, "* 99", false, tokyo);
+   }
+   catch (const invalid_argument&)
+   {
+      refused = true;
+   }
+   if (!refused)
+      return Fail("CronAfter() with bad syntax did not throw");
+
+   // The hook agrees with the regular search through every clock change
+   const char *saved = getenv("TZ");
+   string savedTZ = saved ? saved : "";
+   int rc = 0;
+   setenv("TZ", "America/New_York", 1);
+   tzset();
+   if (Date(2025, 7, 1, 12, 0, 0).Str("%Z") != "EDT")
+      cout << "SKIP: timezone hook checks" << endl;
+   else if (!SameInZone("America/New_York", 2025) ||
+            !SameInZone("Australia/Lord_Howe", 2025) ||
+            !SameInZone("America/Santiago", 2025))
+      rc = Fail("The timezone hook disagrees around a clock change");
+
+   if (saved)
+      setenv("TZ", savedTZ.c_str(), 1);
+   else
+      unsetenv("TZ");
+   tzset();
+   return rc;
 }
 
 static int CheckLeapYears()
@@ -281,6 +423,53 @@ static int CheckHardening()
    if ((clock() - added) / CLOCKS_PER_SEC > 1)
       return Fail("AddMonth() with a huge value took too long");
 
+   // '*' mixed with other entries ('*,5') is unclear and refused; steps
+   // such as '*/5,3' are fine
+   const char *mixed[] = {"0 *,5", "0 5,*", "0 0 *,13 * 1", "*,*", "1-5,*"};
+   for (unsigned i = 0; i < sizeof(mixed)/sizeof(mixed[0]); i++)
+   {
+      if (Date::CronValid(mixed[i]) || Date::CronValid(mixed[i], true) ||
+          !Refused(Date(2025, 6, 1, 0, 0, 0), mixed[i], false))
+      {
+         cerr << "FATAL: '" << mixed[i] << "' was accepted" << endl;
+         return 1;
+      }
+   }
+   if (!Date::CronValid("0 */5,3") ||
+       !Expect("0 */20,3", false, 2025, 6, 1, 0, 0, 30, "2025-06-01 00:03:00"))
+      return Fail("A step next to a value should still work");
+
+   // More comma entries than a field can hold are refused, even when
+   // they repeat the same value
+   string many = "0";
+   for (int i = 0; i < 10000; i++)
+      many += ",0";
+   if (Date::CronValid("* " + many) || !Date::CronValid("* 0,0,0"))
+      return Fail("A huge repeated list was accepted");
+
+   // Moments that can't be shown as a local date are refused, not left
+   // holding garbage
+   bool outOfRange = false;
+   try
+   {
+      Date dMax(numeric_limits<time_t>::max());
+   }
+   catch (const out_of_range&)
+   {
+      outOfRange = true;
+   }
+   if (!outOfRange)
+      return Fail("Date(time_t max) should throw out_of_range");
+
+   // The largest year that fits works; one more is refused and the date
+   // stays as it was
+   Date dKeep(2025, 1, 1, 0, 0, 0);
+   if (dKeep.AddYear(2147483000) || dKeep.Str() != "2025-01-01 00:00:00")
+      return Fail("AddYear() past the largest year was accepted");
+   if (!dKeep.SetYear(2147483647) || dKeep.Year() != 2147483647 ||
+       dKeep.AddYear(1) || dKeep.AddMonth(12) || dKeep.Year() != 2147483647)
+      return Fail("The largest year was not handled");
+
    // Every value of every field is still quick to work out
    clock_t started = clock();
    if (!Expect("0-59 0-59 0-23 1-31 1-12 0-6", false,
@@ -313,7 +502,22 @@ static int CheckDaylightSaving()
       rc = Fail("2:30 doesn't exist on 2025-03-09 and should be skipped");
    else if (!Expect("0 0 /1", false, 2025, 3, 9, 1, 30, 0, "2025-03-09 03:00:00"))
       rc = Fail("The hour after the clocks go forward was missed");
+   else if (!Expect("0 0 1 8-14 3 0 3600,7200", false, 2025, 1, 1, 0, 0, 0,
+                    "2025-03-09 03:00:00"))
+      rc = Fail("A drift across the clocks going forward is wrong");
    else
+   {
+      // Changing the month or year keeps the clock time across daylight
+      // saving (12:00 stays 12:00)
+      Date dMonth(2025, 7, 15, 12, 0, 0);
+      Date dSet(2025, 7, 15, 12, 0, 0);
+      Date dYear(2025, 1, 15, 12, 0, 0);
+      if (!dMonth.AddMonth(5) || dMonth.Str() != "2025-12-15 12:00:00" ||
+          !dSet.SetMonth(12) || dSet.Str() != "2025-12-15 12:00:00" ||
+          !dYear.SetMonth(7) || dYear.Str() != "2025-07-15 12:00:00")
+         rc = Fail("A month change moved the clock time");
+   }
+   if (rc == 0 && Date(2025, 7, 1, 12, 0, 0).Str("%Z") == "EDT")
    {
       // 01:00-01:59 happens twice; the second 01:00 is 10 minutes after
       // the first 01:50
@@ -401,22 +605,6 @@ static int CheckDriftLists()
    if ((clock() - started) / CLOCKS_PER_SEC > 1)
       return Fail("A long drift list took too long");
    return 0;
-}
-
-// True if working out 'cron' throws std::invalid_argument
-static bool Refused(const Date& start, const char *cron, bool isISC)
-{
-   try
-   {
-      start.Cron(cron, isISC);
-   }
-   catch (const invalid_argument&)
-   {
-      return true;
-   }
-   cerr << "FATAL: '" << cron << "'" << (isISC ? " (isc)" : "")
-        << " was accepted" << endl;
-   return false;
 }
 
 static int CheckExtras()
@@ -548,6 +736,18 @@ int main(int argc, char **argv)
               << test_plan[i].cron[5] << " "
               << test_plan[i].cron[6] << ": "
               << dObjRef.Str("%Y/%m/%d %H:%M:%S (%a)") << endl;
+         // The timezone hook gives the same answer
+         string joined = string(test_plan[i].cron[0]);
+         for (int f = 1; f < 7; f++)
+            joined += string(" ") + test_plan[i].cron[f];
+         if (Date::CronAfter(dObjStart.Time(), joined, false, SystemZone()) !=
+               dObjRef.Time())
+         {
+            cerr << "FATAL: the timezone hook disagrees on '" << joined
+                 << "' from " << dObjStart.Str() << endl;
+            return 1;
+         }
+
          if(dObjRef <= dObjStart)
          {
             // Houston! We have a serious problem
@@ -568,7 +768,7 @@ int main(int argc, char **argv)
 
    if (CheckExtras() || CheckLeapYears() || CheckDayMatching() ||
        CheckUnsetFields() || CheckSteps() || CheckHardening() ||
-       CheckDriftLists() || CheckDaylightSaving())
+       CheckDriftLists() || CheckDaylightSaving() || CheckTimeZones())
       return 1;
    return 0;
 }

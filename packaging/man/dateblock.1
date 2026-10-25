@@ -4,9 +4,9 @@
 .SH "NAME"
 \fBdateblock\fR \- block (sleep) until a cron\-style moment in time
 .SH "SYNOPSIS"
-\fBdateblock\fR [\fB\-t\fR] [\fB\-v\fR] \fB\-c\fR \fICRON\fR [\fB\-i\fR]
+\fBdateblock\fR [\fB\-t\fR] [\fB\-v\fR] [\fB\-z\fR \fIZONE\fR] \fB\-c\fR \fICRON\fR [\fB\-i\fR]
 .br
-\fBdateblock\fR [\fB\-t\fR] [\fB\-v\fR] [\fB\-s\fR \fISEC\fR] [\fB\-n\fR \fIMIN\fR] [\fB\-o\fR \fIHOUR\fR] [\fB\-d\fR \fIDOM\fR] [\fB\-m\fR \fIMONTH\fR] [\fB\-w\fR \fIDOW\fR] [\fB\-x\fR \fIDRIFT\fR]
+\fBdateblock\fR [\fB\-t\fR] [\fB\-v\fR] [\fB\-z\fR \fIZONE\fR] [\fB\-s\fR \fISEC\fR] [\fB\-n\fR \fIMIN\fR] [\fB\-o\fR \fIHOUR\fR] [\fB\-d\fR \fIDOM\fR] [\fB\-m\fR \fIMONTH\fR] [\fB\-w\fR \fIDOW\fR] [\fB\-x\fR \fIDRIFT\fR]
 .br
 \fBdateblock\fR \fB\-h\fR
 .SH "DESCRIPTION"
@@ -30,6 +30,8 @@ Use \fB\-\-test\fR to see when \fBdateblock\fR would unblock without waiting\.
 \fB\-c\fR, \fB\-\-cron=\fR\fICRON\fR: The full schedule as a single cron string; see \fICRON STRING\fR\. When this is used the individual field options below are ignored\.
 .P
 \fB\-i\fR, \fB\-\-isc\fR: Read the \fB\-\-cron\fR string as a regular 5 field crontab(5) entry (minute, hour, day of month, month, day of week) with no second or drift fields\. ISC stands for the Internet Systems Consortium cron\.
+.P
+\fB\-z\fR, \fB\-\-timezone=\fR\fIZONE\fR: Read the schedule in timezone \fIZONE\fR (a name from the timezone database, such as \fBAmerica/Toronto\fR or \fBAsia/Tokyo\fR) instead of this computer's own; see \fITIMEZONES\fR\. The times shown by \fB\-\-test\fR and \fB\-\-verbose\fR are in that timezone too\.
 .P
 \fB\-s\fR, \fB\-\-second=\fR\fISEC\fR: The second(s) to unblock on (0\-59)\.
 .P
@@ -67,9 +69,9 @@ every \fIz\fR'th value from \fIx\fR to \fIy\fR, so \fB1\-10/3\fR is 1, 4, 7 and 
 both \fIx\fR and \fIy\fR (separator)\.
 .TP
 \fB*\fR
-any value\.
+any value\. It must be on its own; \fB*,5\fR is not valid\.
 .P
-These can be mixed when separated by commas, so \fB*/a,b,c\-d,/e\fR is valid\. However \fBx\-y\-z\fR, \fB/x/y\fR, \fB/x\-y\fR and an unfinished \fBx\-\fR are not\. Every value must be within the range of its field; \fB400\-4000\fR never works for any field\.
+These can be mixed when separated by commas, so \fB*/a,b,c\-d,/e\fR is valid\. However \fBx\-y\-z\fR, \fB/x/y\fR, \fB/x\-y\fR, an unfinished \fBx\-\fR, an empty entry (\fB5,,6\fR) and a \fB*\fR mixed with other entries are not\. Every value must be within the range of its field; \fB400\-4000\fR never works for any field\.
 .SH "CRON STRING"
 The \fB\-\-cron\fR string has up to 7 fields separated by white space:
 .IP "" 4
@@ -110,6 +112,13 @@ It always matches at second 0\. Every other field means exactly what it says, so
 When both day fields are restricted (neither starts with \fB*\fR), \fIeither\fR one may match: \fB0 0 1 * 1\fR is the 1st of every month and every Monday\.
 .IP "\(bu" 4
 \fB*/x\fR counts from the field's lowest value, so a day of month of \fB*/5\fR is the 1st, 6th, 11th and so on (without \fB\-\-isc\fR it is the 5th, 10th, 15th and so on)\.
+.IP "" 0
+.SH "TIMEZONES"
+The schedule is read in this computer's timezone (the \fBTZ\fR environment variable, or the system setting), unless \fB\-\-timezone\fR names another one\.
+.IP "\(bu" 4
+Daylight saving follows that timezone\. A time skipped when the clocks go forward (such as 2:30 in most of North America on the second Sunday of March) does not happen that day, and a time repeated when they go back matches the first time it comes around\.
+.IP "\(bu" 4
+\fBdateblock\fR unblocks at that exact moment, no matter which timezone the computer itself is in\.
 .IP "" 0
 .SH "DRIFTING"
 A drift adds a number of seconds onto the time that was matched\. For example, to wake up on the 1st minute of every 10 minute interval (1, 11, 21, \|\.\|\.\|\., 51) use a minute of \fB*/10\fR with a drift of 60 seconds\.
@@ -171,6 +180,16 @@ $ dateblock \-i \-c "0 9 * * 1\-5"
 .fi
 .IP "" 0
 .P
+Block until 9:00 in Tokyo, whatever timezone this computer is in:
+.IP "" 4
+.nf
+$ dateblock \-z Asia/Tokyo \-c "0 0 9"
+$ dateblock \-t \-z Asia/Tokyo \-c "0 0 9"
+Current Time : 2026\-10\-24 22:05:00 JST (Sat)
+Block Until  : 2026\-10\-25 09:00:00 JST (Sun)
+.fi
+.IP "" 0
+.P
 See when a schedule would next run, without waiting:
 .IP "" 4
 .nf
@@ -192,7 +211,7 @@ $ while dateblock \-n /15; do \./backup\.sh; done
 The matching time was reached (or, with \fB\-\-test\fR, was worked out)\.
 .TP
 \fB1\fR
-No options were given, the schedule is not valid, or no matching time exists (such as the 31st of February)\. A schedule counts as impossible when nothing matches within the next 400 years, the length of time it takes the calendar to repeat itself\.
+No options were given, the schedule is not valid, the \fB\-\-timezone\fR is unknown, or no matching time exists (such as the 31st of February)\. A schedule counts as impossible when nothing matches within the next 400 years, the length of time it takes the calendar to repeat itself\.
 .TP
 \fB255\fR
 The command line could not be parsed\.
