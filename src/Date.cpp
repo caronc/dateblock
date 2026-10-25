@@ -1560,6 +1560,17 @@ unsigned long Date::BlockUntil(const Date& until)
    return BlockUntil(until.Time());
 }
 
+unsigned long Date::BlockUntil(const struct tm& until)
+{
+   struct tm tmOut;
+   time_t when;
+   if (!MakeTime(until, tmOut, when))
+   {
+      throw out_of_range("The date is outside of the supported range.");
+   }
+   return BlockUntil(when);
+}
+
 unsigned long Date::BlockUntil(time_t until)
 {
 #if !defined(_WIN32) && !defined(__APPLE__)

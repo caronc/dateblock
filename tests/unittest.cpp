@@ -666,6 +666,36 @@ static int CheckExtras()
    if (!refused)
       return Fail("Cron() with a bad minute field did not throw");
 
+   // BlockUntil() also takes a struct tm (local time)
+   struct tm past = Date(2000, 1, 1, 0, 0, 0).Tm();
+   if (Date::BlockUntil(past) != 0 ||
+       Date::BlockUntil(Date(2000, 1, 1, 0, 0, 0).Tm()) != 0)
+      return Fail("BlockUntil() a struct tm in the past should not wait");
+
+   Date soon;
+   soon.AddSec(1);
+   struct tm next = soon.Tm();
+   next.tm_isdst = -1;
+   time_t blockStart = time(NULL);
+   while (Date::BlockUntil(next) > 0);
+   if (Date().Time() < soon.Time() || time(NULL) - blockStart > 2)
+      return Fail("BlockUntil() a struct tm woke up at the wrong time");
+
+   struct tm huge = past;
+   huge.tm_year = 2147483647 - 1900;
+   huge.tm_mon = 12;
+   bool tooBig = false;
+   try
+   {
+      Date::BlockUntil(huge);
+   }
+   catch (const out_of_range&)
+   {
+      tooBig = true;
+   }
+   if (!tooBig)
+      return Fail("BlockUntil() a struct tm past the largest year should throw");
+
    // Inline drift; nothing may follow it
    if (!Date::CronValid("* 5 +20") || Date::CronValid("* 5 +20 1"))
       return Fail("Inline drift validation is wrong");

@@ -245,8 +245,13 @@ class Date
      //  - Otherwise returns the number of seconds still left; call it again
      //    to keep waiting.  This happens when a signal wakes us up early,
      //    and (on macOS and Windows) after every second of sleep.
+     //  - A struct tm is a local date/time, read the same way mktime()
+     //    reads it (set tm_isdst to -1 to let it work out daylight
+     //    saving).  Throws std::out_of_range if it isn't a date that can
+     //    be shown.
      static unsigned long BlockUntil(const Date& until);
      static unsigned long BlockUntil(time_t until);
+     static unsigned long BlockUntil(const struct tm& until);
 
    private:
      struct tm m_tmObj;
