@@ -256,50 +256,6 @@ class Date
    private:
      struct tm m_tmObj;
      time_t m_time;
-
-     // Used in conjunction of advanced
-     // cron calculations
-     enum CronComboOffset {
-         COMBO_SEC = 0,
-         COMBO_MIN,
-         COMBO_HOUR,
-         COMBO_DOM,
-         COMBO_MONTH,
-         COMBO_DOW,
-         COMBO_DRIFT,
-         COMBO_COUNT
-      };
-
-     // stepFromLowest: '*/x' counts from minVal (crontab) instead of 0
-     static bool ParseCronString(const std::string& strIn,
-                                 std::set<int> &comboListOut,
-                                 int minVal, int maxVal,
-                                 bool stepFromLowest = false);
-
-     // Parses each field (seconds to drift) into its list; false if any
-     // of them is not formatted correctly
-     static bool ParseFields(const std::string fields[COMBO_COUNT],
-                             bool stepFromLowest,
-                             std::set<int> lists[COMBO_COUNT]);
-
-     // Splits and parses a whole cron string into its field lists.
-     // Throws std::invalid_argument if it is not formatted correctly.
-     static void ParseCron(const std::string& strIn, bool isISC,
-                           std::set<int> lists[COMBO_COUNT],
-                           bool& domStar, bool& dowStar);
-
-     // Finds the next match for fields that were already parsed.
-     //  - isISC: read the fields the way a regular crontab(5) does.
-     //  - domStar/dowStar: the day of month/week field started with '*'
-     //    (only used with isISC).
-     const Date CronFromLists(const std::set<int> lists[COMBO_COUNT],
-                              bool isISC, bool domStar, bool dowStar) const;
-
-     // The first moment after 'after' matching the lists, in 'zone' (NULL
-     // means the computer's own timezone)
-     static time_t NextTime(const std::set<int> lists[COMBO_COUNT],
-                            bool isISC, bool domStar, bool dowStar,
-                            time_t after, const TimeZone* zone);
 };
 
 inline const time_t Date::Time() const

@@ -27,10 +27,8 @@
 #include <stdint.h>
 #include <limits>
 #include <algorithm>
-#include <set>
 #include <vector>
 #include <ctype.h>
-#include <sstream>
 #include <stdexcept>
 #include "Date.h"
 
@@ -146,22 +144,6 @@ namespace {
       return (left > most) ? most : (unsigned long)left;
    }
 
-   // Splits 'strIn' at each 'delimiter', skipping empty pieces
-   void SplitList(const string& strIn, char delimiter, vector<string>& tokens)
-   {
-      size_t startPos = 0;
-      tokens.clear();
-      while (startPos <= strIn.size())
-      {
-         size_t nextPos = strIn.find(delimiter, startPos);
-         if (nextPos == string::npos)
-            nextPos = strIn.size();
-         if (nextPos > startPos)
-            tokens.push_back(strIn.substr(startPos, nextPos - startPos));
-         startPos = nextPos + 1;
-      }
-   }
-
    // Splits a whitespace separated cron string into its fields.
    //  - Missing fields are filled in with '*'.
    //  - A '+N' entry (dateblock format only) jumps straight to the drift
@@ -176,12 +158,20 @@ namespace {
                                Date::DBL_CRON_FIELD_COUNT;
       bool ok = true;
       bool drifted = false;
-      string token;
-      istringstream in(strIn);
+      size_t pos = 0;
 
       tokens.clear();
-      while (in >> token)
+      while (true)
       {
+         while (pos < strIn.size() && isspace((unsigned char)strIn[pos]))
+            pos++;
+         if (pos == strIn.size())
+            break;
+         size_t start = pos;
+         while (pos < strIn.size() && !isspace((unsigned char)strIn[pos]))
+            pos++;
+         string token(strIn, start, pos - start);
+
          if (drifted || tokens.size() >= token_max)
          {
             // More entries then expected found
@@ -213,14 +203,15 @@ namespace {
       return ok;
    }
 
-   // Reads the number starting at 'pos' (moving 'pos' past it).  Fails if
-   // there is no number there or it is outside of 'lo' to 'hi'.
-   bool ReadNumber(const string& str, size_t& pos, int lo, int hi,
+   // Reads the number starting at 'pos' (moving 'pos' past it), stopping
+   // at 'end'.  Fails if there is no number there or it is outside of 'lo'
+   // to 'hi'.
+   bool ReadNumber(const string& str, size_t& pos, size_t end, int lo, int hi,
                    long long& out)
    {
       size_t start = pos;
       out = 0;
-      while (pos < str.size() && isdigit((unsigned char)str[pos]))
+      while (pos < end && isdigit((unsigned char)str[pos]))
       {
          out = out * 10 + (str[pos] - '0');
          if (out > hi)
@@ -455,6 +446,350 @@ namespace {
 
       throw runtime_error(
          "No moment in time matches this cron (none in the next 400 years).");
+   }
+
+   // The fields of a cron string, in order (the drift comes last)
+   enum Field { F_SEC, F_MIN, F_HOUR, F_DOM, F_MONTH, F_DOW, F_DRIFT,
+                F_COUNT };
+
+   // The lowest and highest value of each field
+   int FieldLow(int field)
+   {
+      const int lows[F_COUNT] = {
+         Date::T_SEC_MIN, Date::T_MIN_MIN, Date::T_HOUR_MIN, Date::T_DOM_MIN,
+         Date::T_MONTH_MIN, Date::T_DOW_MIN, Date::T_DRIFT_MIN };
+      return lows[field];
+   }
+
+   int FieldHigh(int field)
+   {
+      const int highs[F_COUNT] = {
+         Date::T_SEC_MAX, Date::T_MIN_MAX, Date::T_HOUR_MAX, Date::T_DOM_MAX,
+         Date::T_MONTH_MAX, Date::T_DOW_MAX, Date::T_DRIFT_MAX };
+      return highs[field];
+   }
+
+   // What a cron string allows, once parsed
+   struct CronFields
+   {
+      uint64_t mask[F_DRIFT];   // bit 'n' set: value 'n' is allowed
+      bool given[F_DRIFT];      // false: the field was '*' (or left out)
+      vector<int> drifts;       // sorted, no repeats; empty: no drift
+      bool isISC;               // read as a regular crontab entry
+      bool domStar, dowStar;    // crontab: the day field started with '*'
+   };
+
+   // Reads the comma separated entries of one field.  Each entry is one of:
+   //   *            any value (on its own only; '*,5' is unclear, so it
+   //                is refused)
+   //   x            a value
+   //   x-y (y-x)    every value from x to y
+   //   x-y/z        every z'th value from x to y
+   //   */x (/x)     every value divisible by x, or with stepFromLowest
+   //                every x'th value from the lowest one (crontab)
+   // Anything else (ie: '5-', 'x-y-z', '/x/y', or an empty entry such as
+   // '5,,6') is invalid.
+   //  - Each entry is handed to 'add(first, last, step)', which may refuse
+   //    it by returning false.
+   //  - 'given' is false when the field is '*' (or empty).
+   template <class Add>
+   bool ReadField(const string& str, int lo, int hi, bool stepFromLowest,
+                  Add& add, bool& given)
+   {
+      given = false;
+      if (str.empty())
+         return true;
+
+      // More entries than a field can ever hold (ie: '0,0,0,...' repeated
+      // a million times) are refused before anything is read
+      if (count(str.begin(), str.end(), ',') >= CRON_MAX_FIELD_VALUES)
+         return false;
+
+      bool star = false;
+      size_t entries = 0;
+      size_t start = 0;
+      while (true)
+      {
+         size_t end = str.find(',', start);
+         if (end == string::npos)
+            end = str.size();
+         if (end == start)
+            return false;
+         entries++;
+
+         if (end - start == 1 && str[start] == '*')
+         {
+            star = true;
+         }
+         else
+         {
+            size_t pos = start;
+            long long first, last, step = 1;
+            if (str[start] == '/' ||
+                (end - start > 1 && str[start] == '*' && str[start + 1] == '/'))
+            {
+               // Modulus
+               pos += (str[start] == '/') ? 1 : 2;
+               if (!ReadNumber(str, pos, end, lo, hi, step) || step == 0)
+                  return false;
+               first = stepFromLowest ? lo : 0;
+               last = hi;
+            }
+            else
+            {
+               if (!ReadNumber(str, pos, end, lo, hi, first))
+                  return false;
+               last = first;
+               if (pos < end && str[pos] == '-')
+               {
+                  // Range
+                  pos++;
+                  if (!ReadNumber(str, pos, end, lo, hi, last))
+                     return false;
+                  if (first > last)
+                  {
+                     long long tmp = first;
+                     first = last;
+                     last = tmp;
+                  }
+
+                  // Step through the range
+                  if (pos < end && str[pos] == '/')
+                  {
+                     pos++;
+                     if (!ReadNumber(str, pos, end, 1, hi, step))
+                        return false;
+                  }
+               }
+            }
+            if (pos != end || !add(first, last, step))
+               return false;
+            given = true;
+         }
+
+         if (end == str.size())
+            break;
+         start = end + 1;
+      }
+      return !(star && entries > 1);
+   }
+
+   // Sets the bit of every value an entry allows (time fields; they all
+   // fit in 64 bits)
+   struct AddToMask
+   {
+      uint64_t mask;
+      int lo;
+      bool operator()(long long first, long long last, long long step)
+      {
+         for (long long value = first; value <= last; value += step)
+            if (value >= lo)
+               mask |= (uint64_t)1 << value;
+         return true;
+      }
+   };
+
+   // Sorts 'values' and drops repeats
+   void Tidy(vector<int>& values)
+   {
+      sort(values.begin(), values.end());
+      values.erase(unique(values.begin(), values.end()), values.end());
+   }
+
+   // Collects every value an entry allows (the drift, which can be as large
+   // as INT_MAX), so a list such as '0-2147483647' can't use up all of the
+   // memory or time:
+   //  - At most twice CRON_MAX_FIELD_VALUES values are collected in all,
+   //    repeats included.  Small overlaps ('0-9999,5') are fine, but piles
+   //    of them ('0,1-9999,2-9999,...') are refused right away.
+   //  - Once repeats are dropped, at most CRON_MAX_FIELD_VALUES may be left
+   //    (see ParseFields()).
+   struct AddToList
+   {
+      vector<int>& values;
+      bool operator()(long long first, long long last, long long step)
+      {
+         long long added = (last - first) / step + 1;
+         if ((long long)values.size() + added > 2 * CRON_MAX_FIELD_VALUES)
+            return false;
+         for (long long value = first; value <= last; value += step)
+            values.push_back((int)value);
+         return true;
+      }
+   };
+
+   // Parses every field (seconds to drift); false if any of them is not
+   // formatted correctly.  'stepFromLowest' is crontab's reading of '*/x'.
+   bool ParseFields(const string fields[F_COUNT], bool stepFromLowest,
+                    CronFields& out)
+   {
+      for (int i = 0; i < F_DRIFT; i++)
+      {
+         AddToMask add = { 0, FieldLow(i) };
+         if (!ReadField(fields[i], FieldLow(i), FieldHigh(i), stepFromLowest,
+                        add, out.given[i]))
+            return false;
+         out.mask[i] = add.mask;
+         out.given[i] = out.given[i] && add.mask != 0;
+      }
+
+      out.drifts.clear();
+      AddToList add = { out.drifts };
+      bool given;
+      if (!ReadField(fields[F_DRIFT], FieldLow(F_DRIFT), FieldHigh(F_DRIFT),
+                     stepFromLowest, add, given))
+         return false;
+      Tidy(out.drifts);
+      return out.drifts.size() <= CRON_MAX_FIELD_VALUES;
+   }
+
+   // Splits and parses a whole cron string.  Throws std::invalid_argument if
+   // it is not formatted correctly.
+   //
+   //         Dateblock Format
+   //
+   //     +------------------------------ second (0 - 59)
+   //     |  +--------------------------- min (0 - 59)
+   //     |  |  +----------------------- hour (0 - 23)
+   //     |  |  |  +----------------- day of month (1 - 31)
+   //     |  |  |  |  +----------- month (1 - 12)
+   //     |  |  |  |  |  +----- day of week (0 - 6) (Sunday=0)
+   //     |  |  |  |  |  |  +- drift time (defaults to zero)
+   //     |  |  |  |  |  |  |
+   //     -  -  -  -  -  -  -
+   //     *  *  *  *  *  *  *
+   //
+   //         ISC Format (no second or drift)
+   //
+   //     +----------------------------- min (0 - 59)
+   //     |  +----------------------- hour (0 - 23)
+   //     |  |  +----------------- day of month (1 - 31)
+   //     |  |  |  +----------- month (1 - 12)
+   //     |  |  |  |  +----- day of week (0 - 6) (Sunday=0)
+   //     |  |  |  |  |
+   //     -  -  -  -  -
+   //     *  *  *  *  *
+   void ParseCron(const string& strIn, bool isISC, CronFields& out)
+   {
+      vector<string> tokens;
+      if (!SplitCronString(strIn, isISC, tokens))
+      {
+         // Too many fields, or something after the drift
+         throw invalid_argument("The cron is not formatted correctly.");
+      }
+
+      out.isISC = isISC;
+      if (!isISC)
+      {
+         if (!ParseFields(&tokens[0], false, out))
+            throw invalid_argument("The cron is not formatted correctly.");
+         out.domStar = out.dowStar = true;
+         return;
+      }
+
+      // ISC has no seconds or drift field ('*' means not given)
+      const string fields[F_COUNT] = {
+         "*", tokens[0], tokens[1], tokens[2], tokens[3], tokens[4], "*" };
+      if (!ParseFields(fields, true, out))
+         throw invalid_argument("The cron is not formatted correctly.");
+
+      // crontab(5) treats a day field starting with '*' as unrestricted
+      out.domStar = (tokens[2][0] == '*');
+      out.dowStar = (tokens[4][0] == '*');
+   }
+
+   // The first moment after 'after' that 'f' allows, read in 'zone' (NULL
+   // means the computer's own timezone)
+   time_t NextTime(const CronFields& f, time_t after,
+                   const Date::TimeZone* zone)
+   {
+      uint64_t masks[F_DRIFT];
+      for (int i = 0; i < F_DRIFT; i++)
+         masks[i] = f.given[i] ? f.mask[i] : AllOf(FieldLow(i), FieldHigh(i));
+
+      Schedule s;
+      if (f.isISC)
+      {
+         // A crontab entry has no seconds; it runs at the start of the
+         // minute.  When both day fields are restricted, either one may
+         // match.
+         masks[F_SEC] = 1;
+         s.domOrDow = !f.domStar && !f.dowStar;
+      }
+      else
+      {
+         // Fields smaller than the smallest one given reset to their lowest
+         // value, so '-n 5' means 5 minutes past the hour at second 0.
+         //  - Day of month and day of week count as the same size.
+         //  - With nothing given at all we unblock at the start of each
+         //    minute.
+         bool dayGiven = f.given[F_DOM] || f.given[F_DOW];
+         int smallest = f.given[F_SEC]   ? 0 :
+                        f.given[F_MIN]   ? 1 :
+                        f.given[F_HOUR]  ? 2 :
+                        dayGiven         ? 3 :
+                        f.given[F_MONTH] ? 4 : 1;
+         if (smallest > 0)
+            masks[F_SEC] = (uint64_t)1 << Date::T_SEC_MIN;
+         if (smallest > 1 && !f.given[F_MIN])
+            masks[F_MIN] = (uint64_t)1 << Date::T_MIN_MIN;
+         if (smallest > 2 && !f.given[F_HOUR])
+            masks[F_HOUR] = (uint64_t)1 << Date::T_HOUR_MIN;
+         if (smallest > 3 && !dayGiven)
+            masks[F_DOM] = (uint64_t)1 << Date::T_DOM_MIN;
+         s.domOrDow = false;
+      }
+      s.sec = masks[F_SEC];
+      s.min = masks[F_MIN];
+      s.hour = masks[F_HOUR];
+      s.dom = masks[F_DOM];
+      s.month = masks[F_MONTH];
+      s.dow = masks[F_DOW];
+
+      // A drift is added after the match.  Matching from 'now - drift' keeps
+      // only the part of the drift that fits inside the schedule's interval,
+      // so no match is ever skipped.  With several drifts the earliest wins.
+      //  - Drifts are handled largest first.  One search from 'now -
+      //    largest' finds a match that every drift reaching past it shares,
+      //    so those need no search of their own; only the smallest of them
+      //    can win.
+      //  - The rest start searching after that match, so the whole drift
+      //    list costs about one pass over the time it covers instead of one
+      //    full search per drift.
+      vector<time_t> drifts(f.drifts.begin(), f.drifts.end());
+      if (drifts.empty())
+         drifts.push_back(0);
+
+      const time_t lowest = numeric_limits<time_t>::min();
+      const time_t highest = numeric_limits<time_t>::max();
+      time_t best = highest;
+      vector<time_t>::iterator end = drifts.end();
+      while (end != drifts.begin())
+      {
+         time_t largest = *(end - 1);
+         if (after < lowest + largest)
+            throw runtime_error("The reference time is out of range.");
+         time_t match = NextMatch(s, after - largest, zone);
+
+         // The smallest drift that still lands after now
+         vector<time_t>::iterator use =
+            upper_bound(drifts.begin(), end, after - match);
+         if (match > highest - *use)
+            throw runtime_error("The matching time is out of range.");
+         time_t when = match + *use;
+         if (when < best)
+            best = when;
+
+         // Nothing can be sooner than the very next second
+         if (best == after + 1)
+            break;
+         end = use;
+      }
+
+      struct tm check;
+      if (!ZoneLocal(zone, best, check))
+         throw runtime_error("The matching time is out of range.");
+      return best;
    }
 }
 
@@ -1056,153 +1391,21 @@ const Date Date::Cron(int lSecOffset,
                       int lDriftOffset) const
 {
    // A value outside of its field's range means "not set"
-   const int values[COMBO_COUNT] = {
+   const int values[F_COUNT] = {
       lSecOffset, lMinOffset, lHourOffset, lDomOffset,
       lMonthOffset, lDowOffset, lDriftOffset };
-   const int lows[COMBO_COUNT] = {
-      T_SEC_MIN, T_MIN_MIN, T_HOUR_MIN, T_DOM_MIN,
-      T_MONTH_MIN, T_DOW_MIN, T_DRIFT_MIN };
-   const int highs[COMBO_COUNT] = {
-      T_SEC_MAX, T_MIN_MAX, T_HOUR_MAX, T_DOM_MAX,
-      T_MONTH_MAX, T_DOW_MAX, T_DRIFT_MAX };
 
-   set<int> lists[COMBO_COUNT];
-   for (int i = 0; i < COMBO_COUNT; i++)
+   CronFields f;
+   for (int i = 0; i < F_DRIFT; i++)
    {
-      bool set = (values[i] >= lows[i] && values[i] <= highs[i]);
-      lists[i].insert(set ? values[i] : T_NO_ENTRY);
+      f.given[i] = (values[i] >= FieldLow(i) && values[i] <= FieldHigh(i));
+      f.mask[i] = f.given[i] ? (uint64_t)1 << values[i] : 0;
    }
-   return CronFromLists(lists, false, true, true);
-}
-
-//------------------------------------------------
-//
-//  Function: CronFromLists
-//
-//------------------------------------------------
-const Date Date::CronFromLists(const set<int> lists[COMBO_COUNT],
-                               bool isISC, bool domStar, bool dowStar) const
-{
-   return Date(NextTime(lists, isISC, domStar, dowStar, m_time, NULL));
-}
-
-//------------------------------------------------
-//
-//  Function: NextTime
-//
-//------------------------------------------------
-time_t Date::NextTime(const set<int> lists[COMBO_COUNT], bool isISC,
-                      bool domStar, bool dowStar, time_t after,
-                      const TimeZone* zone)
-{
-   // Each field is a bit mask of the values it allows
-   const int lows[COMBO_DRIFT] = {
-      T_SEC_MIN, T_MIN_MIN, T_HOUR_MIN, T_DOM_MIN, T_MONTH_MIN, T_DOW_MIN };
-   const int highs[COMBO_DRIFT] = {
-      T_SEC_MAX, T_MIN_MAX, T_HOUR_MAX, T_DOM_MAX, T_MONTH_MAX, T_DOW_MAX };
-   uint64_t masks[COMBO_DRIFT];
-   bool given[COMBO_DRIFT];
-
-   for (int i = 0; i < COMBO_DRIFT; i++)
-   {
-      // A list holding only T_NO_ENTRY means the field was not given
-      given[i] = !(lists[i].size() == 1 && *lists[i].begin() == T_NO_ENTRY);
-      masks[i] = 0;
-      for (set<int>::const_iterator itr = lists[i].begin();
-           itr != lists[i].end(); itr++)
-         if (*itr >= lows[i] && *itr <= highs[i])
-            masks[i] |= (uint64_t)1 << *itr;
-      if (!given[i])
-         masks[i] = AllOf(lows[i], highs[i]);
-   }
-
-   Schedule s;
-   if (isISC)
-   {
-      // A crontab entry has no seconds; it runs at the start of the minute.
-      // When both day fields are restricted, either one may match.
-      masks[COMBO_SEC] = 1;
-      s.domOrDow = !domStar && !dowStar;
-   }
-   else
-   {
-      // Fields smaller than the smallest one given reset to their lowest
-      // value, so '-n 5' means 5 minutes past the hour at second 0.
-      //  - Day of month and day of week count as the same size.
-      //  - With nothing given at all we unblock at the start of each minute.
-      bool dayGiven = given[COMBO_DOM] || given[COMBO_DOW];
-      int smallest = given[COMBO_SEC]   ? 0 :
-                     given[COMBO_MIN]   ? 1 :
-                     given[COMBO_HOUR]  ? 2 :
-                     dayGiven           ? 3 :
-                     given[COMBO_MONTH] ? 4 : 1;
-      if (smallest > 0)
-         masks[COMBO_SEC] = (uint64_t)1 << T_SEC_MIN;
-      if (smallest > 1 && !given[COMBO_MIN])
-         masks[COMBO_MIN] = (uint64_t)1 << T_MIN_MIN;
-      if (smallest > 2 && !given[COMBO_HOUR])
-         masks[COMBO_HOUR] = (uint64_t)1 << T_HOUR_MIN;
-      if (smallest > 3 && !dayGiven)
-         masks[COMBO_DOM] = (uint64_t)1 << T_DOM_MIN;
-      s.domOrDow = false;
-   }
-   s.sec = masks[COMBO_SEC];
-   s.min = masks[COMBO_MIN];
-   s.hour = masks[COMBO_HOUR];
-   s.dom = masks[COMBO_DOM];
-   s.month = masks[COMBO_MONTH];
-   s.dow = masks[COMBO_DOW];
-
-   // A drift is added after the match.  Matching from 'now - drift' keeps
-   // only the part of the drift that fits inside the schedule's interval,
-   // so no match is ever skipped.  With several drifts the earliest wins.
-   //  - Drifts are handled largest first.  One search from 'now - largest'
-   //    finds a match that every drift reaching past it shares, so those
-   //    need no search of their own; only the smallest of them can win.
-   //  - The rest start searching after that match, so the whole drift list
-   //    costs about one pass over the time it covers instead of one full
-   //    search per drift.
-   vector<time_t> drifts;
-   const set<int>& driftList = lists[COMBO_DRIFT];
-   for (set<int>::const_iterator itr = driftList.begin();
-        itr != driftList.end(); itr++)
-   {
-      time_t drift = (*itr > 0) ? *itr : 0;
-      if (drifts.empty() || drifts.back() != drift)
-         drifts.push_back(drift);
-   }
-
-   const time_t lowest = numeric_limits<time_t>::min();
-   const time_t highest = numeric_limits<time_t>::max();
-   // There is always at least one drift (0 when none was given)
-   time_t best = highest;
-   vector<time_t>::iterator end = drifts.end();
-   while (end != drifts.begin())
-   {
-      time_t largest = *(end - 1);
-      if (after < lowest + largest)
-         throw runtime_error("The reference time is out of range.");
-      time_t match = NextMatch(s, after - largest, zone);
-
-      // The smallest drift that still lands after now
-      vector<time_t>::iterator use =
-         upper_bound(drifts.begin(), end, after - match);
-      if (match > highest - *use)
-         throw runtime_error("The matching time is out of range.");
-      time_t when = match + *use;
-      if (when < best)
-         best = when;
-
-      // Nothing can be sooner than the very next second
-      if (best == after + 1)
-         break;
-      end = use;
-   }
-
-   struct tm check;
-   if (!ZoneLocal(zone, best, check))
-      throw runtime_error("The matching time is out of range.");
-   return best;
+   if (lDriftOffset >= T_DRIFT_MIN && lDriftOffset <= T_DRIFT_MAX)
+      f.drifts.push_back(lDriftOffset);
+   f.isISC = false;
+   f.domStar = f.dowStar = true;
+   return Date(NextTime(f, m_time, NULL));
 }
 
 //------------------------------------------------
@@ -1218,11 +1421,11 @@ bool Date::CronValid(const string& sSecOffset,
                      const string& sDowOffset,
                      const string& sDriftOffset)
 {
-   const string fields[COMBO_COUNT] = {
+   const string fields[F_COUNT] = {
       sSecOffset, sMinOffset, sHourOffset, sDomOffset,
       sMonthOffset, sDowOffset, sDriftOffset };
-   set<int> comboList[COMBO_COUNT];
-   return ParseFields(fields, false, comboList);
+   CronFields f;
+   return ParseFields(fields, false, f);
 }
 
 //------------------------------------------------
@@ -1233,11 +1436,10 @@ bool Date::CronValid(const string& sSecOffset,
 //------------------------------------------------
 bool Date::CronValid(const string& strIn, bool isISC)
 {
-   set<int> comboList[COMBO_COUNT];
-   bool domStar, dowStar;
+   CronFields f;
    try
    {
-      ParseCron(strIn, isISC, comboList, domStar, dowStar);
+      ParseCron(strIn, isISC, f);
    }
    catch (const invalid_argument&)
    {
@@ -1259,15 +1461,17 @@ const Date Date::Cron(const string& sSecOffset,
                       const string& sDowOffset,
                       const string& sDriftOffset) const
 {
-   const string fields[COMBO_COUNT] = {
+   const string fields[F_COUNT] = {
       sSecOffset, sMinOffset, sHourOffset, sDomOffset,
       sMonthOffset, sDowOffset, sDriftOffset };
-   set<int> comboList[COMBO_COUNT];
-   if (!ParseFields(fields, false, comboList))
+   CronFields f;
+   if (!ParseFields(fields, false, f))
    {
       throw invalid_argument("The cron is not formatted correctly.");
    }
-   return CronFromLists(comboList, false, true, true);
+   f.isISC = false;
+   f.domStar = f.dowStar = true;
+   return Date(NextTime(f, m_time, NULL));
 }
 
 //------------------------------------------------
@@ -1277,10 +1481,9 @@ const Date Date::Cron(const string& sSecOffset,
 //------------------------------------------------
 const Date Date::Cron(const string& strIn, bool isISC) const
 {
-   set<int> comboList[COMBO_COUNT];
-   bool domStar, dowStar;
-   ParseCron(strIn, isISC, comboList, domStar, dowStar);
-   return CronFromLists(comboList, isISC, domStar, dowStar);
+   CronFields f;
+   ParseCron(strIn, isISC, f);
+   return Date(NextTime(f, m_time, NULL));
 }
 
 //------------------------------------------------
@@ -1291,184 +1494,9 @@ const Date Date::Cron(const string& strIn, bool isISC) const
 time_t Date::CronAfter(time_t after, const string& strIn, bool isISC,
                        const TimeZone& zone)
 {
-   set<int> comboList[COMBO_COUNT];
-   bool domStar, dowStar;
-   ParseCron(strIn, isISC, comboList, domStar, dowStar);
-   return NextTime(comboList, isISC, domStar, dowStar, after, &zone);
-}
-
-//------------------------------------------------
-//
-//  Function: ParseCron
-//
-//------------------------------------------------
-void Date::ParseCron(const string& strIn, bool isISC,
-                     set<int> comboList[COMBO_COUNT],
-                     bool& domStar, bool& dowStar)
-{
-   //         Dateblock Format
-   //
-   //     +------------------------------ second (0 - 59)
-   //     |  +--------------------------- min (0 - 59)
-   //     |  |  +----------------------- hour (0 - 23)
-   //     |  |  |  +----------------- day of month (1 - 31)
-   //     |  |  |  |  +----------- month (1 - 12)
-   //     |  |  |  |  |  +----- day of week (0 - 6) (Sunday=0)
-   //     |  |  |  |  |  |  +- drift time (defaults to zero)
-   //     |  |  |  |  |  |  |
-   //     -  -  -  -  -  -  -
-   //     *  *  *  *  *  *  *
-   //
-   //         ISC Format (no second or drift)
-   //
-   //     +----------------------------- min (0 - 59)
-   //     |  +----------------------- hour (0 - 23)
-   //     |  |  +----------------- day of month (1 - 31)
-   //     |  |  |  +----------- month (1 - 12)
-   //     |  |  |  |  +----- day of week (0 - 6) (Sunday=0)
-   //     |  |  |  |  |
-   //     -  -  -  -  -
-   //     *  *  *  *  *
-   vector<string> v_tokens;
-   if (!SplitCronString(strIn, isISC, v_tokens))
-   {
-      // Too many fields, or something after the drift
-      throw invalid_argument("The cron is not formatted correctly.");
-   }
-
-   if (!isISC)
-   {
-      if (!ParseFields(&v_tokens[0], false, comboList))
-         throw invalid_argument("The cron is not formatted correctly.");
-      domStar = dowStar = true;
-      return;
-   }
-
-   // ISC has no seconds or drift field ('*' means not given)
-   const string fields[COMBO_COUNT] = {
-      "*", v_tokens[0], v_tokens[1], v_tokens[2], v_tokens[3], v_tokens[4],
-      "*" };
-   if (!ParseFields(fields, true, comboList))
-      throw invalid_argument("The cron is not formatted correctly.");
-
-   // crontab(5) treats a day field starting with '*' as unrestricted
-   domStar = (v_tokens[2][0] == '*');
-   dowStar = (v_tokens[4][0] == '*');
-}
-
-//------------------------------------------------
-//
-//  Function: ParseFields
-//
-//------------------------------------------------
-bool Date::ParseFields(const string fields[COMBO_COUNT], bool stepFromLowest,
-                       set<int> comboList[COMBO_COUNT])
-{
-   const int lows[COMBO_COUNT] = {
-      T_SEC_MIN, T_MIN_MIN, T_HOUR_MIN, T_DOM_MIN,
-      T_MONTH_MIN, T_DOW_MIN, T_DRIFT_MIN };
-   const int highs[COMBO_COUNT] = {
-      T_SEC_MAX, T_MIN_MAX, T_HOUR_MAX, T_DOM_MAX,
-      T_MONTH_MAX, T_DOW_MAX, T_DRIFT_MAX };
-   for (int i = 0; i < COMBO_COUNT; i++)
-   {
-      if (!ParseCronString(fields[i], comboList[i], lows[i], highs[i],
-                           stepFromLowest))
-         return false;
-   }
-   return true;
-}
-
-bool Date::ParseCronString(const string& strIn, set<int> &comboListOut,
-                             int minVal, int maxVal,
-                             bool stepFromLowest)
-{
-   // Each comma separated entry is one of:
-   //   *            any value (on its own only; '*,5' is unclear, so it
-   //                is refused)
-   //   x            a value
-   //   x-y (y-x)    every value from x to y
-   //   x-y/z        every z'th value from x to y
-   //   */x (/x)     every value divisible by x, or with stepFromLowest
-   //                every x'th value from the lowest one (crontab)
-   // Anything else (ie: '5-', 'x-y-z', '/x/y', or an empty entry such as
-   // '5,,6') is invalid.
-   if (!strIn.empty() && (strIn[0] == ',' || strIn[strIn.size() - 1] == ',' ||
-                          strIn.find(",,") != string::npos))
-      return false;
-
-   // More entries than a field can ever hold (ie: '0,0,0,...' repeated a
-   // million times) are refused before anything is stored
-   if (count(strIn.begin(), strIn.end(), ',') >= CRON_MAX_FIELD_VALUES)
-      return false;
-
-   vector<string> tokens;
-   SplitList(strIn, ',', tokens);
-   if (tokens.size() > 1 && find(tokens.begin(), tokens.end(), "*") != tokens.end())
-      return false;
-
-   for (vector<string>::const_iterator itr = tokens.begin();
-        itr != tokens.end(); itr++)
-   {
-      const string& token = *itr;
-      if (token == "*")
-         continue;
-
-      size_t pos = 0;
-      long long first, last, step = 1;
-      if (token[0] == '/' || token.compare(0, 2, "*/") == 0)
-      {
-         // Modulus
-         pos = (token[0] == '/') ? 1 : 2;
-         if (!ReadNumber(token, pos, minVal, maxVal, step) || step == 0)
-            return false;
-         first = stepFromLowest ? minVal : 0;
-         last = maxVal;
-      }
-      else
-      {
-         if (!ReadNumber(token, pos, minVal, maxVal, first))
-            return false;
-         last = first;
-         if (pos < token.size() && token[pos] == '-')
-         {
-            // Range
-            pos++;
-            if (!ReadNumber(token, pos, minVal, maxVal, last))
-               return false;
-            if (first > last)
-            {
-               long long tmp = first;
-               first = last;
-               last = tmp;
-            }
-
-            // Step through the range
-            if (pos < token.size() && token[pos] == '/')
-            {
-               pos++;
-               if (!ReadNumber(token, pos, 1, maxVal, step))
-                  return false;
-            }
-         }
-      }
-      if (pos != token.size())
-         return false;
-
-      // Refuse lists that would take up an absurd amount of memory
-      long long added = (last - first) / step + 1;
-      if (added + (long long)comboListOut.size() > CRON_MAX_FIELD_VALUES)
-         return false;
-
-      for (long long value = first; value <= last; value += step)
-         if (value >= minVal)
-            comboListOut.insert((int)value);
-   }
-
-   // A list holding only T_NO_ENTRY means the field was not given
-   if (comboListOut.empty())
-      comboListOut.insert(T_NO_ENTRY);
-   return true;
+   CronFields f;
+   ParseCron(strIn, isISC, f);
+   return NextTime(f, after, &zone);
 }
 
 //------------------------------------------------

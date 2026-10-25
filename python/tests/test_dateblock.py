@@ -17,6 +17,7 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 """Tests for the dateblock Python module (run with: python3 -m unittest)."""
 import os
+import random
 import time as _time
 import unittest
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
@@ -395,6 +396,33 @@ class DateblockTests(unittest.TestCase):
     def test_huge_repeated_list_raises_syntax_error(self):
         with self.assertRaises(SyntaxError):
             db("* " + ",".join(["0"] * 10001), block=False)
+
+    def test_random_input_only_raises_syntax_or_value_error(self):
+        # Junk, and valid crons with a few characters changed: each one is
+        # either worked out or refused with SyntaxError (bad cron) or
+        # ValueError (never happens, or a NUL character)
+        rnd = random.Random(20261024)
+        letters = "0123456789*/-,+ \t\n*/-,+5,0-1/\x00\xe9\u65e5a!"
+        seeds = ("0 */5 3,4 1-15 * 1-5 +30", "* 5 +20,40", "0 0 0 29 2 1",
+                 "0 9 * * 1-5", "*/15 0-3 1,15 */2 *")
+        ref = datetime(2025, 1, 15, 3, 10)
+        for round_ in range(3000):
+            if round_ % 2:
+                cron = "".join(rnd.choice(letters)
+                               for _ in range(rnd.randrange(30)))
+            else:
+                cron = list(rnd.choice(seeds))
+                for _ in range(rnd.randint(1, 3)):
+                    at = rnd.randrange(len(cron) + 1)
+                    cron.insert(at, rnd.choice(letters))
+                cron = "".join(cron)
+            for isc in (False, True):
+                with self.subTest(cron=cron, isc=isc):
+                    try:
+                        result = db(cron, isc=isc, ref=ref, block=False)
+                    except (SyntaxError, ValueError):
+                        continue
+                    self.assertGreater(result, ref)
 
     def test_bad_argument_types(self):
         with self.assertRaises(TypeError):

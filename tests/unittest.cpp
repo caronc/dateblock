@@ -19,9 +19,11 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 #include <limits>
+#include <sstream>
 #include <string>
 #include "Date.h"
 using namespace std;
@@ -447,6 +449,31 @@ static int CheckHardening()
    if (Date::CronValid("* " + many) || !Date::CronValid("* 0,0,0"))
       return Fail("A huge repeated list was accepted");
 
+   // Drift lists: repeats don't count against the 10,000 value limit, but
+   // piles of overlapping entries are refused (quickly) instead of being
+   // worked through
+   if (!Date::CronValid("* * * * * * 0-9999,5") ||
+       !Date::CronValid("* * * * * * 0-9999,0-9999") ||
+       Date::CronValid("* * * * * * 0-9999,0-9999,0") ||
+       Date::CronValid("* * * * * * 0-10000"))
+      return Fail("The drift list limits are wrong");
+   string pile = "* * * * * * 0";
+   for (int i = 1; i < 10000; i++)
+   {
+      ostringstream entry;
+      entry << "," << i << "-9999";
+      pile += entry.str();
+   }
+   clock_t piled = clock();
+   if (Date::CronValid(pile) || (clock() - piled) / CLOCKS_PER_SEC > 1)
+      return Fail("A pile of overlapping drift ranges was not refused quickly");
+
+   // Very long input (leading zeros, padding) is still read correctly
+   if (!Date::CronValid("0 " + string(100000, '0') + "5") ||
+       !Expect((string(100000, ' ') + "0 5").c_str(), false,
+               2025, 1, 15, 3, 10, 0, "2025-01-15 04:05:00"))
+      return Fail("Long padded input was not read correctly");
+
    // Moments that can't be shown as a local date are refused, not left
    // holding garbage
    bool outOfRange = false;
@@ -604,6 +631,300 @@ static int CheckDriftLists()
       return Fail("A long drift list on Feb 29th was wrong");
    if ((clock() - started) / CLOCKS_PER_SEC > 1)
       return Fail("A long drift list took too long");
+   return 0;
+}
+
+// A small random number generator with a fixed seed, so every run tests
+// the same inputs (and a failure can be repeated)
+class Random
+{
+   public:
+     Random(unsigned long long seed) : m_state(seed) {}
+     unsigned Next(unsigned below)   // 0 to below - 1
+     {
+        m_state = m_state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return (unsigned)((m_state >> 33) % below);
+     }
+   private:
+     unsigned long long m_state;
+};
+
+// 'str' with anything unprintable shown as \xNN (for error messages)
+static string Shown(const string& str)
+{
+   string out;
+   for (size_t i = 0; i < str.size(); i++)
+   {
+      unsigned char c = (unsigned char)str[i];
+      if (c >= 32 && c < 127)
+         out += (char)c;
+      else
+      {
+         char hex[8];
+         snprintf(hex, sizeof(hex), "\\x%02x", c);
+         out += hex;
+      }
+   }
+   return out;
+}
+
+// Works out 'cron' and checks it behaves: CronValid() is false exactly when
+// Cron() throws std::invalid_argument, nothing else is ever thrown, a
+// result is always after the start, and the timezone hook agrees.
+static bool Behaves(const Date& start, const string& cron, bool isISC)
+{
+   bool valid = Date::CronValid(cron, isISC);
+   const char *problem = NULL;
+   try
+   {
+      Date got = start.Cron(cron, isISC);
+      if (!valid)
+         problem = "was refused by CronValid() but worked out";
+      else if (got <= start)
+         problem = "gave a time that is not after the start";
+      else if (Date::CronAfter(start.Time(), cron, isISC, SystemZone()) !=
+               got.Time())
+         problem = "gave a different time through the timezone hook";
+   }
+   catch (const invalid_argument&)
+   {
+      if (valid)
+         problem = "was accepted by CronValid() but did not parse";
+   }
+   catch (const runtime_error&)
+   {
+      // Valid, but never happens (ie: Feb 31st)
+      if (!valid)
+         problem = "was refused by CronValid() but searched for";
+   }
+   if (problem == NULL)
+      return true;
+   cerr << "FATAL: '" << Shown(cron) << "'" << (isISC ? " (isc) " : " ")
+        << problem << endl;
+   return false;
+}
+
+// Builds one random entry for a field from 'lo' to 'hi', and marks each
+// value it should allow in 'want'.  The values come from the numbers
+// picked, not from reading the text back, so this checks the parser
+// against something independent of it.
+static string RandomEntry(Random& rnd, int lo, int hi, bool isISC,
+                          bool want[64])
+{
+   ostringstream out;
+   unsigned kind = rnd.Next(5);
+   if (kind == 0)
+   {
+      int value = lo + rnd.Next(hi - lo + 1);
+      out << value;
+      want[value] = true;
+   }
+   else if (kind <= 2)
+   {
+      // x-y (either way around), or x-y/z
+      int a = lo + rnd.Next(hi - lo + 1);
+      int b = lo + rnd.Next(hi - lo + 1);
+      int step = (kind == 2) ? 1 + rnd.Next(hi) : 1;
+      out << a << "-" << b;
+      if (kind == 2)
+         out << "/" << step;
+      for (int v = (a < b ? a : b); v <= (a < b ? b : a); v += step)
+         want[v] = true;
+   }
+   else
+   {
+      // */x or /x: divisible by x, or (crontab) every x'th from the lowest
+      int least = (lo > 1) ? lo : 1;
+      int step = least + rnd.Next(hi - least + 1);
+      out << (kind == 3 ? "*/" : "/") << step;
+      for (int v = isISC ? lo : 0; v <= hi; v += step)
+         if (v >= lo)
+            want[v] = true;
+   }
+   if (kind == 0 && rnd.Next(4) == 0)
+   {
+      // Leading zeros are fine
+      return "00" + out.str();
+   }
+   return out.str();
+}
+
+static int CheckParser()
+{
+   // Exactly what is accepted (true) and refused (false)
+   struct Case { const char *cron; bool isISC; bool valid; };
+   const Case cases[] = {
+      // Blank input and every kind of white space between fields
+      {"", false, true}, {"   ", false, true}, {"\t0\n5\r", false, true},
+      {"0\v5\f", false, true}, {"", true, true},
+      // Numbers
+      {"0005", false, true}, {"00", false, true}, {"59", false, true},
+      {"60", false, false}, {"99999999999999999999", false, false},
+      {"-0", false, false}, {"0x5", false, false}, {"5.0", false, false},
+      {"1e1", false, false}, {"a", false, false}, {"5a", false, false},
+      {"0 5 \xc3\xa9", false, false}, {"0 5 \xff", false, false},
+      // Ranges and steps
+      {"5-", false, false}, {"-5", false, false}, {"--5", false, false},
+      {"5--6", false, false}, {"5-6-7", false, false}, {"5/", false, false},
+      {"5/2", false, false}, {"/", false, false}, {"*/", false, false},
+      {"*/0", false, false}, {"/0", false, false}, {"*/*", false, false},
+      {"*/5-6", false, false}, {"*/5/2", false, false}, {"*-5", false, false},
+      {"*/59", false, true}, {"*/60", false, false}, {"1-10/9", false, true},
+      {"1-10/59", false, true}, {"1-10/60", false, false},
+      {"10-1/3", false, true}, {"5-5", false, true}, {"0-0", false, true},
+      {"0-59", false, true}, {"0-60", false, false},
+      // Wildcards
+      {"*5", false, false}, {"5*", false, false}, {"**", false, false},
+      {"*,*", false, false}, {"*,5", false, false}, {"5,*", false, false},
+      {"*/5,*", false, false}, {"*/5,3", false, true},
+      // Commas
+      {",", false, false}, {",,", false, false}, {"5,", false, false},
+      {",5", false, false}, {"5,,6", false, false}, {"5,5", false, true},
+      // Each field's own range
+      {"0 0 24", false, false}, {"0 0 0 0", false, false},
+      {"0 0 0 32", false, false}, {"0 0 0 31", false, true},
+      {"0 0 0 1 0", false, false}, {"0 0 0 1 13", false, false},
+      {"0 0 0 * * 7", false, false}, {"0 0 0 * * 6", false, true},
+      // Drifts
+      {"* * * * * * 2147483647", false, true},
+      {"* * * * * * 2147483648", false, false},
+      {"* * * * * * /2147483647", false, true},
+      {"* * * * * * /1", false, false}, {"* * * * * * -1", false, false},
+      {"+", false, false}, {"+ 5", false, false}, {"* 5 +", false, false},
+      {"+5 6", false, false}, {"++5", false, false},
+      {"* 5 +5,+6", false, false}, {"* * * * * * +5", false, true},
+      {"* * * * * * * +5", false, false}, {"* * * * * * * *", false, false},
+      {"+0", false, true}, {"0 +0", false, true}, {"+0-9999", false, true},
+      // crontab entries
+      {"* * * * *", true, true}, {"* * * * * *", true, false},
+      {"+5", true, false}, {"60 * * * *", true, false},
+      {"*/5 * * * *", true, true}, {"0 0 */5 * *", true, true},
+      {"0 0 0 * *", true, false}, {"0 0 * 0 *", true, false},
+      {"0 0 * * 7", true, false}, {"0 0 *,13 * 1", true, false},
+      {"1-10/3 * * * *", true, true}};
+
+   Date start(2025, 1, 15, 3, 10, 0);
+   for (unsigned i = 0; i < sizeof(cases)/sizeof(cases[0]); i++)
+   {
+      if (Date::CronValid(cases[i].cron, cases[i].isISC) != cases[i].valid)
+      {
+         cerr << "FATAL: '" << Shown(cases[i].cron) << "'"
+              << (cases[i].isISC ? " (isc)" : "") << " should be "
+              << (cases[i].valid ? "accepted" : "refused") << endl;
+         return 1;
+      }
+      if (!Behaves(start, cases[i].cron, cases[i].isISC))
+         return 1;
+   }
+
+   // A NUL byte is never part of a valid cron
+   if (Date::CronValid(string("0 5\0", 4)) || Date::CronValid(string("\0", 1)) ||
+       !Behaves(start, string("0 5\0", 4), false))
+      return Fail("A NUL byte was accepted");
+
+   // Every entry type in every field allows exactly the right values,
+   // checked by collecting each match over a whole minute, hour, day,
+   // month, year or week
+   struct Window
+   {
+      int lo, hi;
+      const char *before, *after;        // dateblock format
+      const char *iscBefore, *iscAfter;  // crontab format (NULL: none)
+      int from[3], to[3];                // dates the matches are collected over
+      int fromHour, toHour;              // (hours on those dates)
+      const int (Date::*get)() const;
+   };
+   const Window windows[] = {
+      {0, 59, "", "", NULL, NULL, {2025, 1, 15}, {2025, 1, 15}, 0, 0, &Date::Sec},
+      {0, 59, "0 ", "", "", " * * * *", {2025, 1, 15}, {2025, 1, 15}, 0, 1, &Date::Min},
+      {0, 23, "0 0 ", "", "0 ", " * * *", {2025, 1, 15}, {2025, 1, 16}, 0, 0, &Date::Hour},
+      {1, 31, "0 0 0 ", "", "0 0 ", " * *", {2025, 1, 1}, {2025, 2, 1}, 0, 0, &Date::DOM},
+      {1, 12, "0 0 0 1 ", "", "0 0 1 ", " *", {2025, 1, 1}, {2026, 1, 1}, 0, 0, &Date::Month},
+      {0, 6, "0 0 0 * * ", "", "0 0 * * ", "", {2025, 1, 5}, {2025, 1, 12}, 0, 0, &Date::DOW}};
+
+   Random rnd(20261024);
+   for (unsigned w = 0; w < sizeof(windows)/sizeof(windows[0]); w++)
+   {
+      const Window& win = windows[w];
+      for (int isISC = 0; isISC <= 1; isISC++)
+      {
+         if (isISC && win.iscBefore == NULL)
+            continue;
+         for (int round = 0; round < 150; round++)
+         {
+            bool want[64] = {false};
+            string field;
+            unsigned entries = 1 + rnd.Next(3);
+            for (unsigned e = 0; e < entries; e++)
+               field += (e ? "," : "") +
+                        RandomEntry(rnd, win.lo, win.hi, isISC != 0, want);
+            string cron = isISC ? win.iscBefore + field + win.iscAfter
+                                : win.before + field + win.after;
+
+            Date from(win.from[0], win.from[1], win.from[2], win.fromHour, 0, 0);
+            Date to(win.to[0], win.to[1], win.to[2], win.toHour, 0, 0);
+            if (win.get == &Date::Sec)
+               to = Date(from.Time() + 60);
+
+            bool got[64] = {false};
+            Date ref(from.Time() - 1);
+            while (true)
+            {
+               Date next = ref.Cron(cron, isISC != 0);
+               if (next >= to)
+                  break;
+               got[(next.*win.get)()] = true;
+               ref = next;
+            }
+            for (int v = win.lo; v <= win.hi; v++)
+            {
+               if (got[v] != want[v])
+               {
+                  cerr << "FATAL: '" << cron << "'" << (isISC ? " (isc)" : "")
+                       << (want[v] ? " missed " : " wrongly matched ")
+                       << v << endl;
+                  return 1;
+               }
+            }
+         }
+      }
+   }
+
+   // Random junk, and valid crons with a character or three changed:
+   // each one is either worked out or refused cleanly
+   const char letters[] = "0123456789*/-,+ \t\n*/-,+5,0-1/\0\xff\xe9" "a!";
+   const string alphabet(letters, sizeof(letters) - 1);
+   const char *seeds[] = {
+      "0 */5 3,4 1-15 * 1-5 +30", "/5 * 3,4", "* 5 +20,40", "0 0 0 29 2 1",
+      "0 0 12 13 * 5", "1-59/2 0-23/3 * * * * 0-9999", "*/10 +60",
+      "0 9 * * 1-5", "*/15 0-3 1,15 */2 *", "30 2 29 2 *"};
+   for (int round = 0; round < 40000; round++)
+   {
+      string cron;
+      if (round % 2 == 0)
+      {
+         unsigned length = rnd.Next(40);
+         for (unsigned i = 0; i < length; i++)
+            cron += alphabet[rnd.Next(alphabet.size())];
+      }
+      else
+      {
+         cron = seeds[rnd.Next(sizeof(seeds)/sizeof(seeds[0]))];
+         for (unsigned changes = 1 + rnd.Next(3); changes > 0; changes--)
+         {
+            size_t at = rnd.Next(cron.size() + 1);
+            char c = alphabet[rnd.Next(alphabet.size())];
+            switch (rnd.Next(3))
+            {
+               case 0: cron.insert(at, 1, c); break;
+               case 1: if (at < cron.size()) cron.erase(at, 1); break;
+               default: if (at < cron.size()) cron[at] = c; break;
+            }
+         }
+      }
+      if (!Behaves(start, cron, false) || !Behaves(start, cron, true))
+         return 1;
+   }
    return 0;
 }
 
@@ -798,7 +1119,8 @@ int main(int argc, char **argv)
 
    if (CheckExtras() || CheckLeapYears() || CheckDayMatching() ||
        CheckUnsetFields() || CheckSteps() || CheckHardening() ||
-       CheckDriftLists() || CheckDaylightSaving() || CheckTimeZones())
+       CheckDriftLists() || CheckDaylightSaving() || CheckTimeZones() ||
+       CheckParser())
       return 1;
    return 0;
 }
