@@ -71,6 +71,9 @@ match any value, except for the ones _smaller_ than the smallest field given:
 those are reset to their lowest value. So `-n 5` unblocks at exactly 5
 minutes past the hour (second 0), and `-o 3` at exactly 3:00:00.
 
+When both a day of the month and a day of the week are given, both have to
+match: `-d 13 -w 5` is every Friday the 13th.
+
 ## FIELD SYNTAX
 
 Every field (and every entry in a cron string) accepts:
@@ -81,14 +84,16 @@ Every field (and every entry in a cron string) accepts:
     every value divisible by _x_ (modulus).
   * `x-y` (or `y-x`):
     every value from _x_ to _y_ (range).
+  * `x-y/z`:
+    every _z_'th value from _x_ to _y_, so `1-10/3` is 1, 4, 7 and 10.
   * `x,y`:
     both _x_ and _y_ (separator).
   * `*`:
     any value.
 
 These can be mixed when separated by commas, so `*/a,b,c-d,/e` is valid.
-However `x-y-z`, `/x/y` and `/x-y` are not. Every value must be within the
-range of its field; `400-4000` never works for any field.
+However `x-y-z`, `/x/y`, `/x-y` and an unfinished `x-` are not. Every value
+must be within the range of its field; `400-4000` never works for any field.
 
 ## CRON STRING
 
@@ -121,6 +126,16 @@ With `--isc` the string is a regular crontab(5) entry instead:
                              |   |   |   |   |
                              *   *   *   *   *
 
+It works the same as a crontab(5) entry does:
+
+  * It always matches at second 0. Every other field means exactly what it
+    says, so `* 3 * * *` is every minute from 3:00 to 3:59.
+  * When both day fields are restricted (neither starts with `*`), _either_
+    one may match: `0 0 1 * 1` is the 1st of every month and every Monday.
+  * `*/x` counts from the field's lowest value, so a day of month of `*/5`
+    is the 1st, 6th, 11th and so on (without `--isc` it is the 5th, 10th,
+    15th and so on).
+
 ## DRIFTING
 
 A drift adds a number of seconds onto the time that was matched. For
@@ -137,6 +152,7 @@ example, to wake up on the 1st minute of every 10 minute interval (1, 11,
   * Inline drifts (in the cron string) accept the separator and range
     syntax, so `0 /5 +15,45` unblocks 15 and 45 seconds after every 5th
     minute. The modulus (`/x`) syntax does not apply to drifts.
+  * A drift list can hold at most 10,000 values (ie: `+0-9999`).
 
 ## EXAMPLES
 
@@ -185,7 +201,9 @@ Run a command every 15 minutes, on the quarter hour:
     The matching time was reached (or, with `--test`, was worked out).
   * `1`:
     No options were given, the schedule is not valid, or no matching time
-    exists (such as the 31st of February).
+    exists (such as the 31st of February). A schedule counts as impossible
+    when nothing matches within the next 400 years, the length of time it
+    takes the calendar to repeat itself.
   * `255`:
     The command line could not be parsed.
 

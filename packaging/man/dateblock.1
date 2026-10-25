@@ -46,6 +46,8 @@ Use \fB\-\-test\fR to see when \fBdateblock\fR would unblock without waiting\.
 \fB\-x\fR, \fB\-\-drift=\fR\fIDRIFT\fR: Extra seconds to wait once the time is matched; see \fIDRIFTING\fR\. Use the 7th field (or \fB+\fR\fIDRIFT\fR) instead when using \fB\-\-cron\fR\.
 .P
 At least one field (or \fB\-\-cron\fR) must be given\. Fields that are not given match any value, except for the ones \fIsmaller\fR than the smallest field given: those are reset to their lowest value\. So \fB\-n 5\fR unblocks at exactly 5 minutes past the hour (second 0), and \fB\-o 3\fR at exactly 3:00:00\.
+.P
+When both a day of the month and a day of the week are given, both have to match: \fB\-d 13 \-w 5\fR is every Friday the 13th\.
 .SH "FIELD SYNTAX"
 Every field (and every entry in a cron string) accepts:
 .TP
@@ -58,13 +60,16 @@ every value divisible by \fIx\fR (modulus)\.
 \fBx\-y\fR (or \fBy\-x\fR)
 every value from \fIx\fR to \fIy\fR (range)\.
 .TP
+\fBx\-y/z\fR
+every \fIz\fR'th value from \fIx\fR to \fIy\fR, so \fB1\-10/3\fR is 1, 4, 7 and 10\.
+.TP
 \fBx,y\fR
 both \fIx\fR and \fIy\fR (separator)\.
 .TP
 \fB*\fR
 any value\.
 .P
-These can be mixed when separated by commas, so \fB*/a,b,c\-d,/e\fR is valid\. However \fBx\-y\-z\fR, \fB/x/y\fR and \fB/x\-y\fR are not\. Every value must be within the range of its field; \fB400\-4000\fR never works for any field\.
+These can be mixed when separated by commas, so \fB*/a,b,c\-d,/e\fR is valid\. However \fBx\-y\-z\fR, \fB/x/y\fR, \fB/x\-y\fR and an unfinished \fBx\-\fR are not\. Every value must be within the range of its field; \fB400\-4000\fR never works for any field\.
 .SH "CRON STRING"
 The \fB\-\-cron\fR string has up to 7 fields separated by white space:
 .IP "" 4
@@ -97,6 +102,15 @@ min (0 \- 59) \-\-\-\-\-\-\-\-\-\-\-\-+   |   |   |   |
                          *   *   *   *   *
 .fi
 .IP "" 0
+.P
+It works the same as a crontab(5) entry does:
+.IP "\(bu" 4
+It always matches at second 0\. Every other field means exactly what it says, so \fB* 3 * * *\fR is every minute from 3:00 to 3:59\.
+.IP "\(bu" 4
+When both day fields are restricted (neither starts with \fB*\fR), \fIeither\fR one may match: \fB0 0 1 * 1\fR is the 1st of every month and every Monday\.
+.IP "\(bu" 4
+\fB*/x\fR counts from the field's lowest value, so a day of month of \fB*/5\fR is the 1st, 6th, 11th and so on (without \fB\-\-isc\fR it is the 5th, 10th, 15th and so on)\.
+.IP "" 0
 .SH "DRIFTING"
 A drift adds a number of seconds onto the time that was matched\. For example, to wake up on the 1st minute of every 10 minute interval (1, 11, 21, \|\.\|\.\|\., 51) use a minute of \fB*/10\fR with a drift of 60 seconds\.
 .IP "\(bu" 4
@@ -107,6 +121,8 @@ A drift can not be given on its own; it needs a schedule to go with it\.
 A drift can not be longer than the interval of the schedule itself\. Only the remainder is kept, so that no matching time is ever skipped\. With a schedule of every 10 seconds (\fB*/10\fR), a drift of 11 really drifts 1 second, and a drift of 10 does nothing at all\.
 .IP "\(bu" 4
 Inline drifts (in the cron string) accept the separator and range syntax, so \fB0 /5 +15,45\fR unblocks 15 and 45 seconds after every 5th minute\. The modulus (\fB/x\fR) syntax does not apply to drifts\.
+.IP "\(bu" 4
+A drift list can hold at most 10,000 values (ie: \fB+0\-9999\fR)\.
 .IP "" 0
 .SH "EXAMPLES"
 Block until the next minute divisible by 10 (0, 10, 20, 30, 40 and 50):
@@ -176,7 +192,7 @@ $ while dateblock \-n /15; do \./backup\.sh; done
 The matching time was reached (or, with \fB\-\-test\fR, was worked out)\.
 .TP
 \fB1\fR
-No options were given, the schedule is not valid, or no matching time exists (such as the 31st of February)\.
+No options were given, the schedule is not valid, or no matching time exists (such as the 31st of February)\. A schedule counts as impossible when nothing matches within the next 400 years, the length of time it takes the calendar to repeat itself\.
 .TP
 \fB255\fR
 The command line could not be parsed\.

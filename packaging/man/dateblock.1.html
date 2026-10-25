@@ -152,6 +152,9 @@ match any value, except for the ones <em>smaller</em> than the smallest field gi
 those are reset to their lowest value. So <code>-n 5</code> unblocks at exactly 5
 minutes past the hour (second 0), and <code>-o 3</code> at exactly 3:00:00.</p>
 
+<p>When both a day of the month and a day of the week are given, both have to
+match: <code>-d 13 -w 5</code> is every Friday the 13th.</p>
+
 <h2 id="FIELD-SYNTAX">FIELD SYNTAX</h2>
 
 <p>Every field (and every entry in a cron string) accepts:</p>
@@ -165,6 +168,8 @@ minutes past the hour (second 0), and <code>-o 3</code> at exactly 3:00:00.</p>
 <dt>
 <code>x-y</code> (or <code>y-x</code>)</dt>
 <dd>every value from <em>x</em> to <em>y</em> (range).</dd>
+<dt><code>x-y/z</code></dt>
+<dd>every <em>z</em>'th value from <em>x</em> to <em>y</em>, so <code>1-10/3</code> is 1, 4, 7 and 10.</dd>
 <dt><code>x,y</code></dt>
 <dd>both <em>x</em> and <em>y</em> (separator).</dd>
 <dt><code>*</code></dt>
@@ -172,8 +177,8 @@ minutes past the hour (second 0), and <code>-o 3</code> at exactly 3:00:00.</p>
 </dl>
 
 <p>These can be mixed when separated by commas, so <code>*/a,b,c-d,/e</code> is valid.
-However <code>x-y-z</code>, <code>/x/y</code> and <code>/x-y</code> are not. Every value must be within the
-range of its field; <code>400-4000</code> never works for any field.</p>
+However <code>x-y-z</code>, <code>/x/y</code>, <code>/x-y</code> and an unfinished <code>x-</code> are not. Every value
+must be within the range of its field; <code>400-4000</code> never works for any field.</p>
 
 <h2 id="CRON-STRING">CRON STRING</h2>
 
@@ -208,6 +213,19 @@ min (0 - 59) ------------+   |   |   |   |
                          *   *   *   *   *
 </code></pre>
 
+<p>It works the same as a <span class="man-ref">crontab<span class="s">(5)</span></span> entry does:</p>
+
+<ul>
+  <li>It always matches at second 0. Every other field means exactly what it
+says, so <code>* 3 * * *</code> is every minute from 3:00 to 3:59.</li>
+  <li>When both day fields are restricted (neither starts with <code>*</code>), <em>either</em>
+one may match: <code>0 0 1 * 1</code> is the 1st of every month and every Monday.</li>
+  <li>
+<code>*/x</code> counts from the field's lowest value, so a day of month of <code>*/5</code>
+is the 1st, 6th, 11th and so on (without <code>--isc</code> it is the 5th, 10th,
+15th and so on).</li>
+</ul>
+
 <h2 id="DRIFTING">DRIFTING</h2>
 
 <p>A drift adds a number of seconds onto the time that was matched. For
@@ -225,6 +243,7 @@ drifts 1 second, and a drift of 10 does nothing at all.</li>
   <li>Inline drifts (in the cron string) accept the separator and range
 syntax, so <code>0 /5 +15,45</code> unblocks 15 and 45 seconds after every 5th
 minute. The modulus (<code>/x</code>) syntax does not apply to drifts.</li>
+  <li>A drift list can hold at most 10,000 values (ie: <code>+0-9999</code>).</li>
 </ul>
 
 <h2 id="EXAMPLES">EXAMPLES</h2>
@@ -283,7 +302,9 @@ Block Until  : 2026-10-25 02:30:00 (Sun)
 <dd>The matching time was reached (or, with <code>--test</code>, was worked out).</dd>
 <dt><code>1</code></dt>
 <dd>No options were given, the schedule is not valid, or no matching time
-exists (such as the 31st of February).</dd>
+exists (such as the 31st of February). A schedule counts as impossible
+when nothing matches within the next 400 years, the length of time it
+takes the calendar to repeat itself.</dd>
 <dt><code>255</code></dt>
 <dd>The command line could not be parsed.</dd>
 </dl>

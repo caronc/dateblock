@@ -240,8 +240,17 @@ class Date
      size_t Tokenize(const std::string& strIn, char delimiter,
                      std::vector<std::string> &tokensOut) const;
 
+     // stepFromLowest: '*/x' counts from minVal (crontab) instead of 0
      bool ParseCronString(const std::string& strIn, std::set<int> &comboListOut,
-                            int minVal, int maxVal) const;
+                            int minVal, int maxVal,
+                            bool stepFromLowest = false) const;
+
+     // Finds the next match for fields that were already parsed.
+     //  - isISC: read the fields the way a regular crontab(5) does.
+     //  - domStar/dowStar: the day of month/week field started with '*'
+     //    (only used with isISC).
+     const Date CronFromLists(const std::set<int> lists[COMBO_COUNT],
+                              bool isISC, bool domStar, bool dowStar) const;
 };
 
 inline const time_t Date::Time() const

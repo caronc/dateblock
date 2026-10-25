@@ -303,6 +303,11 @@ int main(int argc, char **argv)
               << e.what() << endl;
          return 1;
       }
+      catch (const exception& e)
+      {
+         cerr << "Error: " << e.what() << endl;
+         return 1;
+      }
    }
    else
    {
@@ -329,6 +334,11 @@ int main(int argc, char **argv)
       {
          cerr << "Error: No matching date/time could be found: "
               << e.what() << endl;
+         return 1;
+      }
+      catch (const exception& e)
+      {
+         cerr << "Error: " << e.what() << endl;
          return 1;
       }
    }

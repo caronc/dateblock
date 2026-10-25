@@ -120,6 +120,56 @@ class DateblockTests(unittest.TestCase):
             db("0 0 0 30,31 2,3 *", ref=date(2026, 10, 24), block=False),
             datetime(2027, 3, 30))
 
+    def test_leap_day(self):
+        self.assertEqual(db("0 0 0 29 2", ref=date(2097, 3, 1), block=False),
+                         datetime(2104, 2, 29))
+
+    def test_leap_day_on_a_weekday(self):
+        # The next Feb 29th that is a Monday is 31 years away
+        self.assertEqual(
+            db("0 0 0 29 2 1", ref=date(2081, 3, 1), block=False),
+            datetime(2112, 2, 29))
+
+    def test_day_of_month_and_week_both_match(self):
+        self.assertEqual(db("0 0 0 1 * 1", ref=date(2025, 6, 3), block=False),
+                         datetime(2025, 9, 1))
+
+    def test_isc_day_of_month_or_week_matches(self):
+        self.assertEqual(
+            db("0 0 1 * 1", isc=True, ref=date(2025, 6, 3), block=False),
+            datetime(2025, 6, 9))
+
+    def test_isc_step_counts_from_lowest_value(self):
+        self.assertEqual(
+            db("0 0 */5 * *", isc=True, ref=date(2025, 6, 2), block=False),
+            datetime(2025, 6, 6))
+
+    def test_range_step(self):
+        ref = datetime(2025, 1, 15, 3, 2, 0)
+        self.assertEqual(db("0 1-10/3", ref=ref, block=False),
+                         datetime(2025, 1, 15, 3, 4, 0))
+
+    def test_month_only_starts_on_the_first(self):
+        self.assertEqual(db("* * * * 3", ref=date(2025, 1, 15), block=False),
+                         datetime(2025, 3, 1))
+
+    def test_full_field_lists_are_quick(self):
+        start = _time.monotonic()
+        self.assertEqual(
+            db("0-59 0-59 0-23 1-31 1-12 0-6", ref=date(2025, 1, 15),
+               block=False),
+            datetime(2025, 1, 15, 0, 0, 1))
+        self.assertLess(_time.monotonic() - start, 2)
+
+    def test_huge_drift_list_raises_syntax_error(self):
+        with self.assertRaises(SyntaxError):
+            db("* * * * * * 0-2147483647", block=False)
+
+    def test_out_of_range_float_reference(self):
+        for ref in (float("nan"), float("inf"), -float("inf"), 1e300):
+            with self.assertRaises(OverflowError):
+                db("*/1", ref=ref, block=False)
+
     def test_bad_argument_types(self):
         with self.assertRaises(TypeError):
             db(5, block=False)

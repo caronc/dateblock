@@ -19,6 +19,7 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <stdlib.h>
 #include <time.h>
 #include "Date.h"
 using namespace std;
@@ -81,6 +82,201 @@ static int Fail(const char *what)
 {
    cerr << "FATAL: " << what << endl;
    return 1;
+}
+
+// Works out 'cron' from the given start time and compares the result
+//  - isISC: read 'cron' as a regular crontab entry
+//  - expect: "YYYY-MM-DD HH:MM:SS", or "" if no match should be found
+static bool Expect(const char *cron, bool isISC, int year, int mon, int day,
+                   int hour, int min, int sec, const char *expect)
+{
+   string got;
+   try
+   {
+      got = Date(year, mon, day, hour, min, sec).Cron(cron, isISC).Str();
+   }
+   catch (const runtime_error&)
+   {
+   }
+   if (got == expect)
+      return true;
+   cerr << "FATAL: '" << cron << "'" << (isISC ? " (isc)" : "")
+        << " gave '" << got << "', expected '" << expect << "'" << endl;
+   return false;
+}
+
+static int CheckLeapYears()
+{
+   // The next Feb 29th, including across 2100 (not a leap year)
+   if (!Expect("0 0 0 29 2", false, 2025, 6, 1, 0, 0, 0, "2028-02-29 00:00:00") ||
+       !Expect("0 0 0 29 2", false, 2097, 3, 1, 0, 0, 0, "2104-02-29 00:00:00") ||
+       !Expect("0 0 0 29 2", false, 2399, 3, 1, 0, 0, 0, "2400-02-29 00:00:00"))
+      return Fail("Feb 29th was not found");
+
+   // Feb 29th on a given weekday can be decades away
+   if (!Expect("0 0 0 29 2 1", false, 2025, 6, 1, 0, 0, 0, "2044-02-29 00:00:00") ||
+       !Expect("0 0 0 29 2 1", false, 2081, 3, 1, 0, 0, 0, "2112-02-29 00:00:00") ||
+       !Expect("0 0 0 29 2 2", false, 2096, 3, 1, 0, 0, 0, "2124-02-29 00:00:00"))
+      return Fail("Feb 29th on a weekday was not found");
+
+   // The last day of February in leap and regular years
+   if (!Expect("0 0 0 28,29 2", false, 2024, 2, 28, 12, 0, 0, "2024-02-29 00:00:00") ||
+       !Expect("0 0 0 28,29 2", false, 2023, 2, 28, 12, 0, 0, "2024-02-28 00:00:00"))
+      return Fail("Feb 28th/29th was not found");
+
+   // Days that never happen
+   if (!Expect("0 0 0 30 2", false, 2024, 1, 1, 0, 0, 0, "") ||
+       !Expect("0 0 0 31 4,6,9,11", false, 2024, 1, 1, 0, 0, 0, ""))
+      return Fail("An impossible day was found");
+   return 0;
+}
+
+static int CheckDayMatching()
+{
+   // Dateblock format: the day of month AND the day of week must match
+   if (!Expect("0 0 0 13 * 5", false, 2025, 6, 1, 0, 0, 0, "2025-06-13 00:00:00") ||
+       !Expect("0 0 0 1 * 1", false, 2025, 6, 3, 0, 0, 0, "2025-09-01 00:00:00") ||
+       !Expect("0 0 0 1,15 * 0,6", false, 2025, 1, 1, 0, 0, 0, "2025-02-01 00:00:00"))
+      return Fail("Day of month AND day of week is wrong");
+
+   // crontab: when both are restricted, either one may match
+   if (!Expect("0 0 1 * 1", true, 2025, 6, 3, 0, 0, 0, "2025-06-09 00:00:00") ||
+       !Expect("0 0 13 * 5", true, 2025, 6, 1, 0, 0, 0, "2025-06-06 00:00:00") ||
+       !Expect("0 0 1,15 * 0,6", true, 2025, 1, 2, 0, 0, 0, "2025-01-04 00:00:00"))
+      return Fail("Day of month OR day of week (isc) is wrong");
+
+   // crontab: a day field starting with '*' doesn't count as restricted
+   if (!Expect("0 0 13 * *", true, 2025, 6, 1, 0, 0, 0, "2025-06-13 00:00:00") ||
+       !Expect("0 0 * * 5", true, 2025, 6, 1, 0, 0, 0, "2025-06-06 00:00:00") ||
+       !Expect("0 0 */2 * 1", true, 2025, 6, 3, 0, 0, 0, "2025-06-09 00:00:00"))
+      return Fail("A '*' day field (isc) is wrong");
+   return 0;
+}
+
+static int CheckUnsetFields()
+{
+   // Fields smaller than the smallest one given reset to their lowest value
+   if (!Expect("* 5", false, 2025, 1, 15, 3, 10, 0, "2025-01-15 04:05:00") ||
+       !Expect("* * 3", false, 2025, 1, 15, 3, 10, 0, "2025-01-16 03:00:00") ||
+       !Expect("* * * * 3", false, 2025, 1, 15, 0, 0, 0, "2025-03-01 00:00:00") ||
+       !Expect("* * * * * 1", false, 2025, 1, 15, 0, 0, 0, "2025-01-20 00:00:00"))
+      return Fail("Unset smaller fields were not reset");
+
+   // Fields between the given ones match anything
+   if (!Expect("/5 * 3,4", false, 2025, 1, 15, 3, 10, 0, "2025-01-15 03:10:05") ||
+       !Expect("0 * * 15", false, 2025, 1, 15, 3, 10, 0, "2025-01-15 03:11:00"))
+      return Fail("Unset fields in between should match anything");
+
+   // crontab entries always run at second 0, every other field as written
+   if (!Expect("* 3 * * *", true, 2025, 6, 1, 3, 10, 30, "2025-06-01 03:11:00") ||
+       !Expect("0 0 * 3 *", true, 2025, 1, 15, 0, 0, 0, "2025-03-01 00:00:00"))
+      return Fail("crontab fields were not read as written");
+   return 0;
+}
+
+static int CheckSteps()
+{
+   // Every z'th value of a range (x-y/z), in both formats
+   if (!Expect("0 1-10/3", false, 2025, 1, 15, 3, 2, 0, "2025-01-15 03:04:00") ||
+       !Expect("0 10-1/3", false, 2025, 1, 15, 3, 8, 0, "2025-01-15 03:10:00") ||
+       !Expect("0 1-10/3", false, 2025, 1, 15, 3, 10, 0, "2025-01-15 04:01:00") ||
+       !Expect("1-10/3 * * * *", true, 2025, 1, 15, 3, 2, 0, "2025-01-15 03:04:00"))
+      return Fail("Range steps (x-y/z) are wrong");
+
+   // Dateblock format: '*/x' is every value divisible by x
+   if (!Expect("0 0 0 */5", false, 2025, 6, 2, 0, 0, 0, "2025-06-05 00:00:00") ||
+       !Expect("0 0 0 1 */3", false, 2025, 2, 1, 0, 0, 0, "2025-03-01 00:00:00"))
+      return Fail("'*/x' (dateblock) should count from 0");
+
+   // crontab: '*/x' counts from the field's lowest value (days 1, 6, 11...
+   // and months 1, 4, 7, 10)
+   if (!Expect("0 0 */5 * *", true, 2025, 6, 2, 0, 0, 0, "2025-06-06 00:00:00") ||
+       !Expect("0 0 1 */3 *", true, 2025, 2, 1, 0, 0, 0, "2025-04-01 00:00:00") ||
+       !Expect("*/20 * * * *", true, 2025, 1, 15, 3, 2, 0, "2025-01-15 03:20:00"))
+      return Fail("'*/x' (isc) should count from the lowest value");
+
+   // Steps that make no sense are refused
+   if (Date::CronValid("1-10/0") || Date::CronValid("1-10/") ||
+       Date::CronValid("1-10/3/2") || Date::CronValid("1-10/61"))
+      return Fail("A broken range step was accepted");
+   return 0;
+}
+
+static int CheckHardening()
+{
+   // Lists that would never end or would use up the memory are refused
+   if (Date::CronValid("* * * * * * 0-2147483647") ||
+       Date::CronValid("* * * * * * /1") ||
+       !Date::CronValid("* * * * * * 0-9999"))
+      return Fail("Huge drift lists should be refused");
+
+   // Values at the very top of the range don't overflow
+   if (!Expect("0 * * * * * 2147483647-2147483647", false,
+               2025, 1, 15, 0, 0, 0, "2025-01-15 00:00:07") ||
+       !Expect("0 * * * * * /2147483647", false,
+               2025, 1, 15, 0, 0, 0, "2025-01-15 00:00:07"))
+      return Fail("The largest drift was not handled");
+
+   // Broken entries are refused instead of quietly matching anything
+   const char *broken[] = {"5-", "5-,7", "/", "*/", "-5", "5-7-9", "/5/2",
+                           "5/2", "**", "5*", "99", "1-99"};
+   for (unsigned i = 0; i < sizeof(broken)/sizeof(broken[0]); i++)
+   {
+      if (Date::CronValid(broken[i]))
+      {
+         cerr << "FATAL: '" << broken[i] << "' was accepted" << endl;
+         return 1;
+      }
+   }
+
+   // Every value of every field is still quick to work out
+   clock_t started = clock();
+   if (!Expect("0-59 0-59 0-23 1-31 1-12 0-6", false,
+               2025, 1, 15, 0, 0, 0, "2025-01-15 00:00:01") ||
+       !Expect("/1 /1 /1 * * * 0-999", false,
+               2025, 1, 15, 0, 0, 0, "2025-01-15 00:00:01"))
+      return Fail("Full field lists were not worked out");
+   if ((clock() - started) / CLOCKS_PER_SEC > 2)
+      return Fail("Full field lists took too long");
+   return 0;
+}
+
+static int CheckDaylightSaving()
+{
+   // New York: clocks go forward 2025-03-09 02:00, back 2025-11-02 02:00
+   const char *saved = getenv("TZ");
+   string savedTZ = saved ? saved : "";
+   setenv("TZ", "America/New_York", 1);
+   tzset();
+
+   int rc = 0;
+   if (Date(2025, 7, 1, 12, 0, 0).Str("%Z") != "EDT")
+   {
+      // No time zone data on this machine
+      cout << "SKIP: daylight saving checks" << endl;
+   }
+   else if (Date(2025, 3, 9, 0, 0, 0).Str() != "2025-03-09 00:00:00")
+      rc = Fail("Setting a time on a clock change day is off");
+   else if (!Expect("0 30 2", false, 2025, 3, 9, 0, 0, 0, "2025-03-10 02:30:00"))
+      rc = Fail("2:30 doesn't exist on 2025-03-09 and should be skipped");
+   else if (!Expect("0 0 /1", false, 2025, 3, 9, 1, 30, 0, "2025-03-09 03:00:00"))
+      rc = Fail("The hour after the clocks go forward was missed");
+   else
+   {
+      // 01:00-01:59 happens twice; the second 01:00 is 10 minutes after
+      // the first 01:50
+      Date start(2025, 11, 2, 1, 50, 0);
+      Date next = start.Cron("0 /15 1");
+      if (start.Str("%Z") == "EDT" && next.Time() - start.Time() != 600)
+         rc = Fail("The repeated hour when the clocks go back was missed");
+   }
+
+   if (saved)
+      setenv("TZ", savedTZ.c_str(), 1);
+   else
+      unsetenv("TZ");
+   tzset();
+   return rc;
 }
 
 static int CheckExtras()
@@ -212,5 +408,8 @@ int main(int argc, char **argv)
       }
    }
 
-   return CheckExtras();
+   if (CheckExtras() || CheckLeapYears() || CheckDayMatching() ||
+       CheckUnsetFields() || CheckSteps() || CheckHardening() || CheckDaylightSaving())
+      return 1;
+   return 0;
 }

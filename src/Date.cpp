@@ -24,6 +24,8 @@
 #include <string.h>
 #include <limits.h>
 #include <errno.h>
+#include <stdint.h>
+#include <limits>
 #include <set>
 #include <vector>
 #include <ctype.h>
@@ -43,9 +45,11 @@
 #include <iostream>
 #endif
 
-// How many passes Cron() may take before giving up on finding a match
-#ifndef CRON_ASSERT_LOOP_LIMIT
-#define CRON_ASSERT_LOOP_LIMIT 400
+// The most values one field may expand to.  Time fields never get close
+// (a minute has 60 values); this stops a drift such as '0-2147483647' from
+// using up all of the memory.
+#ifndef CRON_MAX_FIELD_VALUES
+#define CRON_MAX_FIELD_VALUES 10000
 #endif
 
 using namespace std;
@@ -139,6 +143,149 @@ namespace {
          tokens.push_back("*");
 
       return ok;
+   }
+
+   // Reads the number starting at 'pos' (moving 'pos' past it).  Fails if
+   // there is no number there or it is outside of 'lo' to 'hi'.
+   bool ReadNumber(const string& str, size_t& pos, int lo, int hi,
+                   long long& out)
+   {
+      size_t start = pos;
+      out = 0;
+      while (pos < str.size() && isdigit((unsigned char)str[pos]))
+      {
+         out = out * 10 + (str[pos] - '0');
+         if (out > hi)
+            return false;
+         pos++;
+      }
+      return pos > start && out >= lo;
+   }
+
+   // The calendar (leap years and weekdays included) repeats every 400
+   // years.  If nothing matches within that long, nothing ever will (ie:
+   // the 31st of February).
+   const time_t SEARCH_HORIZON = (time_t)146097 * 86400;
+
+   // What the local time has to look like to match.  Bit 'n' of a mask
+   // set means value 'n' is allowed.
+   struct Schedule
+   {
+      uint64_t sec, min, hour, dom, month, dow;
+      // true:  the day of month OR the day of week has to match (crontab)
+      // false: both have to match
+      bool domOrDow;
+   };
+
+   bool Has(uint64_t mask, int value)
+   {
+      return value >= 0 && value < 64 && ((mask >> value) & 1);
+   }
+
+   // The smallest allowed value from 'from' to 'max', or -1 if there is none
+   int NextIn(uint64_t mask, int from, int max)
+   {
+      for (int value = from; value <= max; value++)
+         if (Has(mask, value))
+            return value;
+      return -1;
+   }
+
+   // A mask allowing every value from 'lo' to 'hi'
+   uint64_t AllOf(int lo, int hi)
+   {
+      uint64_t mask = 0;
+      for (int value = lo; value <= hi; value++)
+         mask |= (uint64_t)1 << value;
+      return mask;
+   }
+
+   bool DayMatches(const Schedule& s, const struct tm& tm)
+   {
+      bool dom = Has(s.dom, tm.tm_mday);
+      bool dow = Has(s.dow, tm.tm_wday);
+      return s.domOrDow ? (dom || dow) : (dom && dow);
+   }
+
+   // Moves 't' forward to a local date/time worked out by mktime().  It
+   // always moves forward, even if the clock change around a daylight
+   // saving switch makes mktime() land a little early.
+   time_t JumpTo(time_t t, struct tm target)
+   {
+      target.tm_isdst = -1;
+      time_t next = mktime(&target);
+      return (next > t) ? next : t + 3600;
+   }
+
+   // The first moment after 'after' whose local time matches 's'.
+   //  - Moves forward one real moment at a time (jumping over whole
+   //    seconds, minutes, hours, days and months that can't match), so a
+   //    daylight saving change never makes it skip a match.
+   //  - Throws std::runtime_error if nothing matches.
+   time_t NextMatch(const Schedule& s, time_t after)
+   {
+      const time_t max = numeric_limits<time_t>::max();
+      time_t t = after + 1;
+      time_t limit = (after > max - SEARCH_HORIZON) ? max : after + SEARCH_HORIZON;
+      struct tm tm;
+
+      while (t <= limit && LocalTime(t, tm))
+      {
+         if (!Has(s.month, tm.tm_mon + 1))
+         {
+            struct tm next = tm;
+            next.tm_mon++;
+            next.tm_mday = 1;
+            next.tm_hour = next.tm_min = next.tm_sec = 0;
+            t = JumpTo(t, next);
+            continue;
+         }
+
+         if (!DayMatches(s, tm) || NextIn(s.hour, tm.tm_hour, 23) < 0)
+         {
+            struct tm next = tm;
+            next.tm_mday++;
+            next.tm_hour = next.tm_min = next.tm_sec = 0;
+            t = JumpTo(t, next);
+            continue;
+         }
+
+         // Seconds left until the next minute and hour start.  A leap
+         // second (tm_sec 60) still moves us forward.
+         time_t toMinute = (tm.tm_sec < 60) ? 60 - tm.tm_sec : 1;
+         time_t toHour = toMinute + (59 - tm.tm_min) * 60;
+
+         if (!Has(s.hour, tm.tm_hour))
+         {
+            // One hour at a time; jumping further could step over a
+            // matching hour when the clocks change
+            t += toHour;
+            continue;
+         }
+
+         if (!Has(s.min, tm.tm_min))
+         {
+            int min = NextIn(s.min, tm.tm_min, 59);
+            t += (min < 0) ? toHour
+                           : toMinute + (min - tm.tm_min - 1) * 60;
+            continue;
+         }
+
+         int sec = NextIn(s.sec, tm.tm_sec, 59);
+         if (sec < 0)
+         {
+            t += toMinute;
+            continue;
+         }
+         if (sec == tm.tm_sec)
+         {
+            return t;
+         }
+         t += sec - tm.tm_sec;
+      }
+
+      throw runtime_error(
+         "No moment in time matches this cron (none in the next 400 years).");
    }
 }
 
@@ -292,17 +439,30 @@ void Date::Set(int year, int mon, int day,
    m_time=Now();
    LocalTime(m_time, m_tmObj);
 
-   // Start on the 1st so that changing the month can't roll over into
-   // the next one (ie: today is the 31st and the new month has 30 days)
-   m_tmObj.tm_mday = T_DOM_MIN;
+   // Other values out of range keep today's value for that field
+   struct tm tmObj = m_tmObj;
+   if (year >= T_YEAR_MIN && year <= T_YEAR_MAX)
+      tmObj.tm_year = year - 1900;
+   if (mon >= T_MONTH_MIN && mon <= T_MONTH_MAX)
+      tmObj.tm_mon = mon - 1;
+   if (hour >= T_HOUR_MIN && hour <= T_HOUR_MAX)
+      tmObj.tm_hour = hour;
+   if (min >= T_MIN_MIN && min <= T_MIN_MAX)
+      tmObj.tm_min = min;
+   if (sec >= T_SEC_MIN && sec <= T_SEC_MAX)
+      tmObj.tm_sec = sec;
 
-   // Now Set Defaults
-   SetYear(year);
-   SetMonth(mon);
-   SetDOM(day);
-   SetHour(hour);
-   SetMin(min);
-   SetSec(sec);
+   // A day out of range means the 1st; one past the end of the month
+   // becomes the last day (ie: the 31st of April is the 30th)
+   tmObj.tm_mday = (day >= T_DOM_MIN && day <= T_DOM_MAX) ? day : T_DOM_MIN;
+   int maxDays = DaysInMonth(tmObj.tm_year + 1900, tmObj.tm_mon);
+   if (tmObj.tm_mday > maxDays)
+      tmObj.tm_mday = maxDays;
+
+   // Set it all at once, and let mktime() work out daylight saving for
+   // that date (today's setting may not apply to it)
+   tmObj.tm_isdst = -1;
+   Set(tmObj);
 }
 
 //------------------------------------------------
@@ -749,402 +909,110 @@ const Date Date::Cron(int lSecOffset,
                       int lDowOffset,
                       int lDriftOffset) const
 {
-   Date dObjFinish(*this);
-   Date dObjRef(*this);
+   // A value outside of its field's range means "not set"
+   const int values[COMBO_COUNT] = {
+      lSecOffset, lMinOffset, lHourOffset, lDomOffset,
+      lMonthOffset, lDowOffset, lDriftOffset };
+   const int lows[COMBO_COUNT] = {
+      T_SEC_MIN, T_MIN_MIN, T_HOUR_MIN, T_DOM_MIN,
+      T_MONTH_MIN, T_DOW_MIN, T_DRIFT_MIN };
+   const int highs[COMBO_COUNT] = {
+      T_SEC_MAX, T_MIN_MAX, T_HOUR_MAX, T_DOM_MAX,
+      T_MONTH_MAX, T_DOW_MAX, T_DRIFT_MAX };
 
-   #ifdef CRON_ASSERT_LOOP_LIMIT
-      // Only allow looping for a specific time before failing
-      unsigned cron_limit = CRON_ASSERT_LOOP_LIMIT;
-   #endif
-
-   #ifdef DEBUG
-   cerr << "DEBUG Date::Cron("
-       << lSecOffset
-       << "," << lMinOffset
-       << "," << lHourOffset
-       << "," << lDomOffset
-       << "," << lMonthOffset
-       << "," << lDowOffset
-       << "," << lDriftOffset << ");" << endl;
-   #endif
-
-   bool bSetSec=(lSecOffset >= Date::T_SEC_MIN &&
-                 lSecOffset <= Date::T_SEC_MAX);
-   bool bSetMin=(lMinOffset >= Date::T_MIN_MIN &&
-                 lMinOffset <= Date::T_MIN_MAX);
-   bool bSetHour=(lHourOffset >= Date::T_HOUR_MIN &&
-                  lHourOffset <= Date::T_HOUR_MAX);
-   bool bSetDom=(lDomOffset >= Date::T_DOM_MIN &&
-                 lDomOffset <= Date::T_DOM_MAX);
-   bool bSetMonth=(lMonthOffset >= Date::T_MONTH_MIN &&
-                   lMonthOffset <= Date::T_MONTH_MAX);
-   bool bSetDow=(lDowOffset >= Date::T_DOW_MIN &&
-                 lDowOffset <= Date::T_DOW_MAX);
-   bool bSetDrift=(lDriftOffset >= Date::T_DRIFT_MIN &&
-                 lDriftOffset <= Date::T_DRIFT_MAX);
-
-   if (!bSetSec)
-        lSecOffset=Date::T_SEC_MIN;     // Force Default
-   if (!bSetMin)
-        lMinOffset=Date::T_MIN_MIN;     // Force Default
-   if (!bSetHour)
-        lHourOffset=Date::T_HOUR_MIN;   // Force Default
-   if (!bSetDom)
-        lDomOffset=Date::T_DOM_MIN;     // Force Default
-   if (!bSetMonth)
-        lMonthOffset=Date::T_MONTH_MIN; // Force Default
-   if (!bSetDow)
-        lDowOffset=Date::T_DOW_MIN;     // Force Default
-   if (!bSetDrift)
-        lDriftOffset=0;                 // Force Default
-
-   // No need to set drift default because if one wasn't detected then
-   // we use whatever was passed in as an option instead
-
-   if (!( bSetMin || bSetHour || bSetDom || bSetMonth || bSetDow ))
+   set<int> lists[COMBO_COUNT];
+   for (int i = 0; i < COMBO_COUNT; i++)
    {
-      // This function requires that at least something has been set
-      // so at worst case scenario (and to avoid an infinite loop
-      // we assume that seconds have been set
-      bSetSec=true;
+      bool set = (values[i] >= lows[i] && values[i] <= highs[i]);
+      lists[i].insert(set ? values[i] : T_NO_ENTRY);
+   }
+   return CronFromLists(lists, false, true, true);
+}
+
+//------------------------------------------------
+//
+//  Function: CronFromLists
+//
+//------------------------------------------------
+const Date Date::CronFromLists(const set<int> lists[COMBO_COUNT],
+                               bool isISC, bool domStar, bool dowStar) const
+{
+   // Each field is a bit mask of the values it allows
+   const int lows[COMBO_DRIFT] = {
+      T_SEC_MIN, T_MIN_MIN, T_HOUR_MIN, T_DOM_MIN, T_MONTH_MIN, T_DOW_MIN };
+   const int highs[COMBO_DRIFT] = {
+      T_SEC_MAX, T_MIN_MAX, T_HOUR_MAX, T_DOM_MAX, T_MONTH_MAX, T_DOW_MAX };
+   uint64_t masks[COMBO_DRIFT];
+   bool given[COMBO_DRIFT];
+
+   for (int i = 0; i < COMBO_DRIFT; i++)
+   {
+      // A list holding only T_NO_ENTRY means the field was not given
+      given[i] = !(lists[i].size() == 1 && *lists[i].begin() == T_NO_ENTRY);
+      masks[i] = 0;
+      for (set<int>::const_iterator itr = lists[i].begin();
+           itr != lists[i].end(); itr++)
+         if (*itr >= lows[i] && *itr <= highs[i])
+            masks[i] |= (uint64_t)1 << *itr;
+      if (!given[i])
+         masks[i] = AllOf(lows[i], highs[i]);
    }
 
-   // A Drift introduces a small problem, it adds time to the final
-   // result. We need to factor this into our calculation a head of time.
-   // If a drift has been specified, we have to assume the current time
-   // is actually in the past by the same amount.
-   if (lDriftOffset > 0)
+   Schedule s;
+   if (isISC)
    {
-      dObjRef.AddSec(-lDriftOffset);
-      dObjFinish.AddSec(-lDriftOffset);
+      // A crontab entry has no seconds; it runs at the start of the minute.
+      // When both day fields are restricted, either one may match.
+      masks[COMBO_SEC] = 1;
+      s.domOrDow = !domStar && !dowStar;
    }
-   #ifdef DEBUG
-   cerr << "DEBUG Date::Cron"
-        << " SetSec: " << bSetSec
-        << ", SetMin: " << bSetMin
-        << ", SetHour: " << bSetHour
-        << ", SetDom: " << bSetDom
-        << ", SetMonth: " << bSetMonth
-        << ", SetDow: " << bSetDow
-        << ", Drift: " << lDriftOffset
-        << endl;
-   #endif
-   // Forever Loop (unless cron is matched)
-   while(1)
+   else
    {
-   #ifdef CRON_ASSERT_LOOP_LIMIT
-      if(cron_limit == 0){
-         // No moment in time matches this cron (ie: February 31st)
-         ostringstream msg;
-         msg << "CRON_ASSERT_LOOP_LIMIT ("
-             << CRON_ASSERT_LOOP_LIMIT
-             << ") reached."
-             << " CRON='"
-             << lSecOffset
-             << " " << lMinOffset
-             << " " << lHourOffset
-             << " " << lDomOffset
-             << " " << lMonthOffset
-             << " " << lDowOffset
-             << " " << lDriftOffset
-             << "'"
-             << ", REF=" << dObjRef.Str();
-         throw runtime_error(msg.str());
-      }
-      // Decrement Limit Counter
-      cron_limit--;
-   #endif
-      #ifdef DEBUG
-      cerr << "DEBUG Date::Cron LOOP"
-              #ifdef CRON_ASSERT_LOOP_LIMIT
-              << "[" << (CRON_ASSERT_LOOP_LIMIT-cron_limit) << "]"
-              #endif
-              << " in=" << this->Str()
-              << ", ref=" << dObjRef.Str()
-              << ", calc=" << dObjFinish.Str()
-              << endl;
-      #endif
-      if (bSetSec)
+      // Fields smaller than the smallest one given reset to their lowest
+      // value, so '-n 5' means 5 minutes past the hour at second 0.
+      //  - Day of month and day of week count as the same size.
+      //  - With nothing given at all we unblock at the start of each minute.
+      bool dayGiven = given[COMBO_DOM] || given[COMBO_DOW];
+      int smallest = given[COMBO_SEC]   ? 0 :
+                     given[COMBO_MIN]   ? 1 :
+                     given[COMBO_HOUR]  ? 2 :
+                     dayGiven           ? 3 :
+                     given[COMBO_MONTH] ? 4 : 1;
+      if (smallest > 0)
+         masks[COMBO_SEC] = (uint64_t)1 << T_SEC_MIN;
+      if (smallest > 1 && !given[COMBO_MIN])
+         masks[COMBO_MIN] = (uint64_t)1 << T_MIN_MIN;
+      if (smallest > 2 && !given[COMBO_HOUR])
+         masks[COMBO_HOUR] = (uint64_t)1 << T_HOUR_MIN;
+      if (smallest > 3 && !dayGiven)
+         masks[COMBO_DOM] = (uint64_t)1 << T_DOM_MIN;
+      s.domOrDow = false;
+   }
+   s.sec = masks[COMBO_SEC];
+   s.min = masks[COMBO_MIN];
+   s.hour = masks[COMBO_HOUR];
+   s.dom = masks[COMBO_DOM];
+   s.month = masks[COMBO_MONTH];
+   s.dow = masks[COMBO_DOW];
+
+   // A drift is added after the match.  Matching from 'now - drift' keeps
+   // only the part of the drift that fits inside the schedule's interval,
+   // so no match is ever skipped.  With several drifts the earliest wins.
+   bool found = false;
+   time_t best = 0;
+   const set<int>& drifts = lists[COMBO_DRIFT];
+   for (set<int>::const_iterator itr = drifts.begin();
+        itr != drifts.end(); itr++)
+   {
+      time_t drift = (*itr > 0) ? *itr : 0;
+      time_t when = NextMatch(s, m_time - drift) + drift;
+      if (!found || when < best)
       {
-         if(dObjFinish.Sec() > lSecOffset)
-         {
-            dObjFinish.AddMin(1); // Add 1 minute
-            dObjFinish.SetSec(lSecOffset);
-            // Continue to parse until the second matches
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=1, min++, sec=" << lSecOffset << endl;
-            #endif
-            continue;
-         }
-         else if(dObjFinish.Sec() < lSecOffset)
-         {
-            dObjFinish.AddSec((lSecOffset-dObjFinish.Sec()));
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=1, min++" << endl;
-            #endif
-            continue;
-         }
-         // else we match correctly!
+         best = when;
+         found = true;
       }
-
-      if (bSetMin)
-      {
-         if(dObjFinish.Min() > lMinOffset)
-         {
-            dObjFinish.AddHour(1); // + 1 hour
-            dObjFinish.SetMin(lMinOffset);
-            // Continue to parse until the minute matches
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=1, hour++, min=" << lMinOffset << endl;
-            #endif
-            continue;
-         }
-         else if(dObjFinish.Min() < lMinOffset)
-         {
-            dObjFinish.AddMin((lMinOffset-dObjFinish.Min()));
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=1, hour++" << endl;
-            #endif
-            continue;
-         }
-         // else we match correctly!
-      }
-
-      if (bSetHour)
-      {
-         if(dObjFinish.Hour() > lHourOffset)
-         {
-            dObjFinish.AddDOM(1); // + 1 day
-            dObjFinish.SetHour(lHourOffset);
-            // Continue to parse until the hour matches
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=1, dom++, hour=" << lHourOffset << endl;
-            #endif
-            continue;
-         }
-         else if(dObjFinish.Hour() < lHourOffset)
-         {
-            dObjFinish.AddHour(lHourOffset-dObjFinish.Hour());
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=1, dom++" << endl;
-            #endif
-            continue;
-         }
-         // else we match correctly!
-      }
-
-      if (bSetDow)
-      {
-         if(dObjFinish.DOW() != lDowOffset)
-         {
-            dObjFinish.AddDOM(1); // Add 1 day
-            // Continue to parse until the DOW matches
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=1, dom++" << endl;
-            #endif
-            continue;
-         }
-      }
-
-      if (bSetDom)
-      {
-         if(dObjFinish.MaxDOMsThisMonth() < lDomOffset)
-         {
-            // Don't handle values like 31 in February, instead, just add a month
-            // and move along
-            dObjFinish.AddMonth(1);
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=1, month++" << endl;
-            #endif
-            continue;
-         }
-         else if(dObjFinish.DOM() > lDomOffset)
-         {
-            dObjFinish.AddMonth(1); // + 1 month
-            dObjFinish.SetDOM(lDomOffset);
-            // Continue to parse until the DOM matches
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=1, month++, dom=" << lDomOffset << endl;
-            #endif
-            continue;
-         }
-         else if(dObjFinish.DOM() < lDomOffset)
-         {
-            dObjFinish.SetDOM(lDomOffset);
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=1, dom=" << lDomOffset << endl;
-            #endif
-            continue;
-         }
-         // else we match correctly!
-      }
-
-      if (bSetMonth)
-      {
-         if(dObjFinish.Month() > lMonthOffset)
-         {
-            dObjFinish.AddYear(1); // + 1 year
-            dObjFinish.SetMonth(lMonthOffset);
-            // Continue to parse until the Month matches
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=1, year++, month=" << lMonthOffset << endl;
-            #endif
-            continue;
-         }
-         else if(dObjFinish.Month() < lMonthOffset)
-         {
-            dObjFinish.SetMonth(lMonthOffset);
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=1, month=" << lMonthOffset << endl;
-            #endif
-            continue;
-         }
-         // else we match correctly!
-      }
-
-      // Reset Items backwards based on what is set
-      if(bSetMonth)
-      {
-         if (!bSetHour) dObjFinish.SetHour(Date::T_HOUR_MIN);  // reset hours
-         if (!bSetMin) dObjFinish.SetMin(Date::T_MIN_MIN);     // reset minutes
-         if (!bSetSec) dObjFinish.SetSec(Date::T_SEC_MIN);     // reset seconds
-
-         if( dObjFinish < dObjRef )
-         {
-            /* This happens when we're caculating on the same
-             * month we are currently in */
-            dObjFinish.AddMonth(1);
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=2, month++" << endl;
-            #endif
-            continue;
-         }
-
-      }
-      else if ( bSetDom || bSetDow )
-      {
-         if (!bSetHour) dObjFinish.SetHour(Date::T_HOUR_MIN);  // reset hours
-         if (!bSetMin) dObjFinish.SetMin(Date::T_MIN_MIN);     // reset minutes
-         if (!bSetSec) dObjFinish.SetSec(Date::T_SEC_MIN);     // reset seconds
-
-         if( dObjFinish < dObjRef )
-         {
-            /* This happens when we're caculating on the same
-             * day we are currently on */
-            dObjFinish.AddDOM(1);
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=2, dom++" << endl;
-            #endif
-            continue;
-         }
-      }
-      else if (bSetHour)
-      {
-         if (!bSetMin) dObjFinish.SetMin(Date::T_MIN_MIN);     // reset minutes
-         if (!bSetSec) dObjFinish.SetSec(Date::T_SEC_MIN);     // reset seconds
-         if( dObjFinish < dObjRef )
-         {
-            /* This happens when we're caculating on the same
-             * hour we are currently on */
-            dObjFinish.AddHour(1);
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=2, hour++" << endl;
-            #endif
-            continue;
-         }
-      }
-      else if (bSetMin)
-      {
-         if (!bSetSec) dObjFinish.SetSec(Date::T_SEC_MIN);     // reset seconds
-         if( dObjFinish < dObjRef )
-         {
-            /* This happens when we're caculating on the same
-             * minute we are currently on */
-            dObjFinish.AddMin(1);
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=2, min++" << endl;
-            #endif
-            continue;
-         }
-      }
-      else if (bSetSec)
-      {
-         if( dObjFinish < dObjRef )
-         {
-            /* This happens when we're caculating on the same
-             * minute we are currently on */
-            dObjFinish.AddSec(1);
-            #ifdef DEBUG
-            cerr << "DEBUG Date::Cron stage=2, sec++" << endl;
-            #endif
-            continue;
-         }
-      }
-
-      // Accomodate Drift time if nessisary
-      if (lDriftOffset > 0)
-         dObjFinish.AddSec(lDriftOffset);
-
-      // We don't use our reference object for the final check; instead we use
-      // *this object! This is VERY IMPORTANT!
-      //
-      // We use the real time. This is very important because dObjRef will
-      // correctly equate in this equation when there is a drift time involved
-      if( dObjFinish == *this )
-      {
-         #ifdef DEBUG
-         cerr << "DEBUG Date::Cron Countermeasures"
-              << " ref==finish (" << this->m_time
-              << "==" << dObjFinish.m_time << ")"
-              << endl;
-         #endif
-         // times can not be identical .. move along
-         //
-         //  This Adjustment 'MUST' be done otherwise it is
-         //  possible for this loop to return true over and
-         //  over again if called consecutively within the same
-         //  second.
-         //
-         //  ie. while [ 1 -eq 1 ]; do ./dateblock -s /5; done
-         //
-         //  should only be called once every 5 seconds reguardless
-         //  if execution time is less then a second
-         //
-         //  Based on the arguments pased, we only need to adjust the
-         //  smallest of them. Hence if Seconds and Years were specified,
-         //  we only need to adjust seconds.
-         //
-         //  This forces the time to be invalid, so the calculation process
-         //  begins over again.
-         if(bSetSec)dObjFinish.AddSec(1);
-         else if(bSetMin)dObjFinish.AddMin(1);
-         else if(bSetHour)dObjFinish.AddHour(1);
-         else if(bSetDom)dObjFinish.AddDOM(1);
-         else if(bSetMonth)dObjFinish.AddMonth(1);
-         else if(bSetDow)dObjFinish.AddDOM(1);
-
-         // Remove Drift Accomodation (if set)
-         if (lDriftOffset > 0)
-            dObjFinish.AddSec(-lDriftOffset);
-
-         #ifdef DEBUG
-         cerr << "DEBUG Date::Cron Countermeasures"
-              << " new_ref=" << dObjFinish.m_time
-              << ", difference=+" << (dObjFinish.m_time - this->m_time)
-              << " sec(s)"
-              << endl;
-         #endif
-         continue;
-      }
-
-      // If the code reaches here, then everything matched
-      // correctly.  There is no need to stay in the loop
-      break;
-
-   } // end infinite while loop
-
-   // Store new Time
-   return dObjFinish;
+   }
+   return Date(best);
 }
 
 //------------------------------------------------
@@ -1251,99 +1119,19 @@ const Date Date::Cron(const string& sSecOffset,
                       const string& sDriftOffset) const
 {
 
-   set<int> comboList[COMBO_COUNT]; // Build Combination List
-   Date dObjFinish(*this);
-
-   // Calculate Possible Seconds Combiniation
-   if(ParseCronString(sSecOffset,comboList[COMBO_SEC],T_SEC_MIN,T_SEC_MAX) &&
+   set<int> comboList[COMBO_COUNT];
+   if (!(ParseCronString(sSecOffset,comboList[COMBO_SEC],T_SEC_MIN,T_SEC_MAX) &&
     ParseCronString(sMinOffset,comboList[COMBO_MIN],T_MIN_MIN,T_MIN_MAX) &&
     ParseCronString(sHourOffset,comboList[COMBO_HOUR],T_HOUR_MIN,T_HOUR_MAX) &&
     ParseCronString(sDomOffset,comboList[COMBO_DOM],T_DOM_MIN,T_DOM_MAX) &&
     ParseCronString(sMonthOffset,comboList[COMBO_MONTH],T_MONTH_MIN,T_MONTH_MAX) &&
     ParseCronString(sDowOffset,comboList[COMBO_DOW],T_DOW_MIN,T_DOW_MAX) &&
-    ParseCronString(sDriftOffset,comboList[COMBO_DRIFT],T_DRIFT_MIN,T_DRIFT_MAX))
+    ParseCronString(sDriftOffset,comboList[COMBO_DRIFT],T_DRIFT_MIN,T_DRIFT_MAX)))
    {
-      // Prepare Iterators
-      set<int>::const_iterator itrSec,
-                               itrMin,
-                               itrHour,
-                               itrDom,
-                               itrMonth,
-                               itrDow,
-                               itrDrift;
-
-      // Date Object to Hold on to the lowest reference point
-      Date dObjRef(dObjFinish);
-      bool bFound = false;
-      string sError;
-
-      // Big On7 unfortunately.  Perhaps this section could be
-      // more smarter and only handle obviously newer times and skip
-      // the obvious short ones.
-      itrSec  = comboList[COMBO_SEC].begin();
-      for(;itrSec != comboList[COMBO_SEC].end();itrSec++)
-      {
-         itrMin  = comboList[COMBO_MIN].begin();
-         for(;itrMin != comboList[COMBO_MIN].end();itrMin++)
-         {
-            itrHour = comboList[COMBO_HOUR].begin();
-            for(;itrHour != comboList[COMBO_HOUR].end();itrHour++)
-            {
-               itrDom  = comboList[COMBO_DOM].begin();
-               for(;itrDom != comboList[COMBO_DOM].end();itrDom++)
-               {
-                  itrMonth= comboList[COMBO_MONTH].begin();
-                  for(;itrMonth != comboList[COMBO_MONTH].end();itrMonth++)
-                  {
-                     itrDow  = comboList[COMBO_DOW].begin();
-                     for(;itrDow != comboList[COMBO_DOW].end();itrDow++)
-                     {
-                        itrDrift  = comboList[COMBO_DRIFT].begin();
-                        for(;itrDrift != comboList[COMBO_DRIFT].end();itrDrift++)
-                        {
-                           // Build Reference Point; a combination that
-                           // can never happen (ie: Feb 30th) is skipped
-                           // as long as another one works out
-                           try
-                           {
-                              dObjRef=Cron(*itrSec,
-                                           *itrMin,
-                                           *itrHour,
-                                           *itrDom,
-                                           *itrMonth,
-                                           *itrDow,
-                                           *itrDrift);
-                           }
-                           catch (const runtime_error& e)
-                           {
-                              sError = e.what();
-                              continue;
-                           }
-
-                           // Store Value if nessisary (the first match
-                           // is always stored)
-                           if(!bFound || dObjRef < dObjFinish)
-                           {
-                              dObjFinish = dObjRef;
-                              bFound = true;
-                           }
-
-                        } // Drift
-                     } // Day of Week
-                  } // Month
-               } // Day of Month
-            } // Hours
-         } // Minutes
-      } // Seconds
-
-      if (!bFound && !sError.empty())
-      {
-         // Not one of the combinations could be matched
-         throw runtime_error(sError);
-      }
-   } // Valid Parsing
-
-   return dObjFinish;
+      // Invalid syntax; CronValid() is what reports it
+      return *this;
+   }
+   return CronFromLists(comboList, false, true, true);
 }
 
 //------------------------------------------------
@@ -1395,183 +1183,111 @@ const Date Date::Cron(const string& strIn, bool isISC) const
       << endl;
    #endif
 
-   // Convert cron to the next relative date
-   return isISC?
-         // Yes? Ok then skip the 'seconds' field (defaults to '*')
-         Cron("*", v_tokens[0], v_tokens[1], v_tokens[2], v_tokens[3],
-               v_tokens[4], "*"):
-         // No? Then handle all of the arguments
-         Cron(v_tokens[0], v_tokens[1], v_tokens[2], v_tokens[3], v_tokens[4],
-              v_tokens[5], v_tokens[6]);
+   if (!isISC)
+   {
+      return Cron(v_tokens[0], v_tokens[1], v_tokens[2], v_tokens[3],
+                  v_tokens[4], v_tokens[5], v_tokens[6]);
+   }
+
+   // ISC: no seconds or drift field
+   set<int> comboList[COMBO_COUNT];
+   comboList[COMBO_SEC].insert(T_NO_ENTRY);
+   comboList[COMBO_DRIFT].insert(T_NO_ENTRY);
+   if (!(ParseCronString(v_tokens[0],comboList[COMBO_MIN],
+                    T_MIN_MIN,T_MIN_MAX,true) &&
+    ParseCronString(v_tokens[1],comboList[COMBO_HOUR],
+                    T_HOUR_MIN,T_HOUR_MAX,true) &&
+    ParseCronString(v_tokens[2],comboList[COMBO_DOM],
+                    T_DOM_MIN,T_DOM_MAX,true) &&
+    ParseCronString(v_tokens[3],comboList[COMBO_MONTH],
+                    T_MONTH_MIN,T_MONTH_MAX,true) &&
+    ParseCronString(v_tokens[4],comboList[COMBO_DOW],
+                    T_DOW_MIN,T_DOW_MAX,true)))
+   {
+      // Invalid syntax; CronValid() is what reports it
+      return *this;
+   }
+   // crontab(5) treats a day field starting with '*' as unrestricted
+   return CronFromLists(comboList, true,
+                        v_tokens[2][0] == '*', v_tokens[4][0] == '*');
 }
 
 bool Date::ParseCronString(const string& strIn, set<int> &comboListOut,
-                             int minVal, int maxVal) const
+                             int minVal, int maxVal,
+                             bool stepFromLowest) const
 {
-   // Valid characters for strIn are:
-   //   0-9,/*
-   // - Return immediately if there are invalid characters
-   // - Delimit Comma's into array
-   // - store unique values into comboList
-
+   // Each comma separated entry is one of:
+   //   *            any value
+   //   x            a value
+   //   x-y (y-x)    every value from x to y
+   //   x-y/z        every z'th value from x to y
+   //   */x (/x)     every value divisible by x, or with stepFromLowest
+   //                every x'th value from the lowest one (crontab)
+   // Anything else (ie: '5-', 'x-y-z', '/x/y') is invalid.
    vector<string> tokens;
-   if(Tokenize(strIn,',',tokens) > 0)
+   Tokenize(strIn, ',', tokens);
+
+   for (vector<string>::const_iterator itr = tokens.begin();
+        itr != tokens.end(); itr++)
    {
-      // Iterate Through Vector Array and Parse Entries
-      vector<string>::const_iterator itr;
-      size_t startPos;
-      size_t nextPos;
-      int rangeStart=-1;
-      bool modFlag=false;
+      const string& token = *itr;
+      if (token == "*")
+         continue;
 
-      for(itr=tokens.begin(); itr!=tokens.end(); itr++)
+      size_t pos = 0;
+      long long first, last, step = 1;
+      if (token[0] == '/' || token.compare(0, 2, "*/") == 0)
       {
-         // cout << "DEBUG: Parsing '" << *itr <<  "' Size: "
-         //    << itr->size() << endl;
-         startPos=0; // Reset Pointer
-         nextPos=0; // Reset Pointer
-         while(startPos < itr->size())
+         // Modulus
+         pos = (token[0] == '/') ? 1 : 2;
+         if (!ReadNumber(token, pos, minVal, maxVal, step) || step == 0)
+            return false;
+         first = stepFromLowest ? minVal : 0;
+         last = maxVal;
+      }
+      else
+      {
+         if (!ReadNumber(token, pos, minVal, maxVal, first))
+            return false;
+         last = first;
+         if (pos < token.size() && token[pos] == '-')
          {
-            for ( ;  nextPos < itr->size() ; nextPos++ )
-               if(!isdigit((*itr)[nextPos]))
-                  break;
-
-          //   cout << "DEBUG: NonNumerical: " << (*itr)[nextPos] << endl;
-            if(nextPos < itr->size()) // A non-Numerical Value was found
+            // Range
+            pos++;
+            if (!ReadNumber(token, pos, minVal, maxVal, last))
+               return false;
+            if (first > last)
             {
-               // Handle It's Value
-               // If '-' then begin storing range
-               // If '*' then do nothing
-               if((*itr)[nextPos] == '*')
-               {
-                  // Update positions to look past dash
-                  startPos = ++nextPos;
-                  continue;
-               }
-               else if((*itr)[nextPos] == '-' && rangeStart < 0)
-               {
-                  if(modFlag == true)
-                  {
-                     // failure
-                     return false;
-                  }
-
-                  // Store Range
-                  istringstream myStream(
-                        itr->substr(startPos,nextPos-startPos));
-                  if(!(myStream >> rangeStart))
-                  {
-                     // failure
-                     return false;
-                  }
-
-                  // Handle Invalid range
-                  if(rangeStart < minVal || rangeStart > maxVal)
-                  {
-                     // failure
-                     return false;
-                  }
-
-                  // Update positions to look past dash
-                  startPos = ++nextPos;
-                  continue;
-
-               }
-               else if((*itr)[nextPos] == '/' && modFlag == false)
-               {
-                  // Mod Val
-                  modFlag=true;
-
-                  // Update positions to look past dash
-                  startPos = ++nextPos;
-                  continue;
-               }
-               else
-               {
-                  // failure
-                  return false;
-               }
+               long long tmp = first;
+               first = last;
+               last = tmp;
             }
 
-            if(nextPos > startPos)
+            // Step through the range
+            if (pos < token.size() && token[pos] == '/')
             {
-               // Store Number
-               int val;
-               istringstream myStream(itr->substr(startPos,nextPos-startPos));
-               if(!(myStream >> val))
-               {
-                  // failure
+               pos++;
+               if (!ReadNumber(token, pos, 1, maxVal, step))
                   return false;
-               }
-
-               // Handle Invalid range
-               if(val < minVal || val > maxVal)
-               {
-                  // failure
-                  return false;
-               }
-
-               if(modFlag == true)
-               {
-                  // Calculate Mod
-                  int newVal=0;
-                  if (val == 0)
-                  {
-                     // failure
-                     return false;
-                  }
-                  for(; (newVal <= maxVal); newVal+=val)
-                  {
-                     if(newVal < minVal)continue;
-                     comboListOut.insert(newVal);
-                  }
-                  // reset mod flag
-                  modFlag=false;
-               }
-               else if(rangeStart < 0)
-               {
-                  // Store Value Otherwise
-                  if(val >= minVal && val <= maxVal)
-                     comboListOut.insert(val);
-               }
-               else
-               {
-                  if(rangeStart > val)
-                  {
-                     // Swap
-                     int tmp;
-                     tmp=rangeStart;
-                     rangeStart=val;
-                     val=tmp;
-                  }
-
-                  // Store Range
-                  for(; (rangeStart <= val); rangeStart++)
-                     if(rangeStart >= minVal && rangeStart <= maxVal)
-                        comboListOut.insert(rangeStart);
-
-                  // Reset Range
-                  rangeStart=-1;
-               }
             }
-
-            // Increment Position
-            startPos = nextPos + 1;
          }
       }
+      if (pos != token.size())
+         return false;
+
+      // Refuse lists that would take up an absurd amount of memory
+      long long count = (last - first) / step + 1;
+      if (count + (long long)comboListOut.size() > CRON_MAX_FIELD_VALUES)
+         return false;
+
+      for (long long value = first; value <= last; value += step)
+         if (value >= minVal)
+            comboListOut.insert((int)value);
    }
 
-   // At the very least; Token list must contain a '-1'
-   // This is used for Basic Cron processing.  '-1' signifies
-   // that no combo value was handled
-   if(comboListOut.size() <=0)comboListOut.insert(-1);
-
-   // Debug List
-   // set<int>::const_iterator itr;
-   // cout << "Size: " << comboListOut.size() << endl;
-   // for(itr=comboListOut.begin(); itr != comboListOut.end(); itr++)
-   //    cout << "Val: " << *itr << endl;
-
+   // A list holding only T_NO_ENTRY means the field was not given
+   if (comboListOut.empty())
+      comboListOut.insert(T_NO_ENTRY);
    return true;
 }
 

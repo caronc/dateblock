@@ -22,6 +22,7 @@
 
 #include <math.h>
 #include <limits>
+#include <new>
 #include <stdexcept>
 #include "Date.h"
 
@@ -129,7 +130,17 @@ static bool PyToDate(PyObject *obj, Date &out)
 
    if (PyFloat_Check(obj))
    {
-      out.Set((time_t) floor(PyFloat_AS_DOUBLE(obj)));
+      // NaN, infinity and huge values can't be turned into a time_t
+      double epoch = floor(PyFloat_AS_DOUBLE(obj));
+      if (!isfinite(epoch) ||
+          epoch < (double) std::numeric_limits<time_t>::min() ||
+          epoch > (double) std::numeric_limits<time_t>::max())
+      {
+         PyErr_SetString(PyExc_OverflowError,
+               "ref is outside of the supported time range.");
+         return false;
+      }
+      out.Set((time_t) epoch);
       return true;
    }
 
@@ -188,23 +199,33 @@ static PyObject *dateblock(PyObject *self, PyObject *args, PyObject *kwds)
       return NULL;
    }
 
-   if (!Date::CronValid(str, isc != 0))
-   {
-      // Raise SyntaxError Exception
-      PyErr_SetString(PyExc_SyntaxError,
-            "The cron specified is not formatted correctly.");
-      return NULL;
-   }
-
+   // A C++ exception must never reach Python; it would abort the
+   // interpreter
    Date dObjFinish;
    try
    {
+      if (!Date::CronValid(str, isc != 0))
+      {
+         // Raise SyntaxError Exception
+         PyErr_SetString(PyExc_SyntaxError,
+               "The cron specified is not formatted correctly.");
+         return NULL;
+      }
       dObjFinish = dObjStart.Cron(str, isc != 0);
    }
    catch (const std::runtime_error &e)
    {
       PyErr_Format(PyExc_ValueError,
             "No date/time matches the cron specified (%s).", e.what());
+      return NULL;
+   }
+   catch (const std::bad_alloc &)
+   {
+      return PyErr_NoMemory();
+   }
+   catch (const std::exception &e)
+   {
+      PyErr_SetString(PyExc_RuntimeError, e.what());
       return NULL;
    }
 

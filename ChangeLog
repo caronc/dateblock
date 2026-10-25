@@ -3,6 +3,8 @@ All notable changes to this project will be documented in this file.
 
 ## [1.1.0] - 2026-10-24
 ### Added
+- Range steps: 'x-y/z' is every z'th value from x to y (ie: '1-10/3' is 1,
+4, 7 and 10).
 - libdateblock shared library (with headers and a pkg-config file) that the
 command line tool and Python bindings both use.
 - `make check` runs the unit tests and command line tests.
@@ -34,6 +36,20 @@ the interpreter).
 error; impossible combinations (such as '30,31' of '2,3') are now skipped
 instead of aborting.
 - Boost is now only needed by the command line tool.
+- A new matching engine works on whole field lists at once instead of
+trying every combination one at a time, so long lists such as
+'0-59 0-59 0-23' are as quick as single values.
+- Fields that are not given only reset to their lowest value when they are
+smaller than the smallest field given, as documented: '/5 * 3,4' is every
+5th second during hours 3 and 4 (minutes are no longer forced to 0).
+- --isc reads a crontab entry the way crontab(5) does: every field except
+the seconds means what it says ('* 3 * * *' is every minute of hour 3), and
+when both day fields are restricted either one may match. '*/x' counts
+from the field's lowest value ('*/5' days are the 1st, 6th, 11th...).
+- A schedule is reported as impossible when nothing matches within 400
+years (one full calendar cycle).
+- Unfinished entries such as '5-' are rejected instead of matching any
+value, and a field may expand to at most 10,000 values.
 
 ### Removed
 - The datemath tool. `date -d` (ie: `date -d '+3 days -2 hours'`) does the
@@ -44,6 +60,16 @@ same job.
 - Setting a reference date while today is the 31st no longer rolls over
 into the following month.
 - Month lengths are no longer off by a day around daylight saving changes.
+- Rare schedules such as Feb 29th on a given weekday are found instead of
+being reported as impossible.
+- A month-only schedule (ie: '-m 3') starts on the 1st instead of keeping
+today's day of the month.
+- Setting a reference time on a daylight saving change day is no longer an
+hour off.
+- Drift values near 2147483647 no longer overflow into an endless loop.
+- Python: a float `ref` of NaN, infinity or out of range raises
+`OverflowError`, and an unexpected C++ error no longer aborts the
+interpreter.
 
 ## [1.0.3] - 2018-05-31
 ### Changed
