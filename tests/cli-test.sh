@@ -19,6 +19,34 @@ echo "$out" | grep -q '^Block Until  : ' || fail "dateblock -t output: $out"
 "$DATEBLOCK" -t -c '0 0 0 31 2 *' >/dev/null 2>&1
 [ $? -eq 1 ] || fail "dateblock did not reject February 31st"
 
+# Every way of writing an option gives the same answer
+want=$("$DATEBLOCK" -t -n 5 | grep '^Block Until')
+for form in "-tn5" "-tn 5" "-t -n5" "-t --minute 5" "-t --minute=5" \
+            "-t --min 5" "-t --min=5" "--test --minute=5"; do
+   # shellcheck disable=SC2086
+   got=$("$DATEBLOCK" $form | grep '^Block Until')
+   [ "$got" = "$want" ] || fail "'dateblock $form' gave: $got"
+done
+
+# A bad command line is refused (exit code 255), never guessed at
+for bad in "--bogus" "-q" "-t --d 5" "-t -n 5 -n 6" "-t -n" "-t -n -t" \
+           "-t --minute" "-t --minute=" "-t --test=1 -n 5" "-t5" "-t --=5"; do
+   # shellcheck disable=SC2086
+   "$DATEBLOCK" $bad >/dev/null 2>&1
+   code=$?
+   [ $code -eq 255 ] || fail "'dateblock $bad' exited with $code (not 255)"
+done
+"$DATEBLOCK" -h 2>&1 | grep -q '^  -z \[ --timezone \] arg' || fail "--help is missing --timezone"
+
+# Huge or odd input is refused cleanly (no crash).  Linux allows at most
+# 128 KB in a single argument, so 100 KB is about as big as it gets.
+"$DATEBLOCK" -t -c "$(head -c 100000 /dev/zero | tr '\0' 5)" >/dev/null 2>&1
+[ $? -eq 1 ] || fail "a 100 KB cron string was not refused cleanly"
+"$DATEBLOCK" -t -n 5 $(seq 1 20000) >/dev/null 2>&1
+[ $? -eq 0 ] || fail "20000 command arguments were not handled"
+"$DATEBLOCK" -t -n "$(printf '\001\377')" >/dev/null 2>&1
+[ $? -eq 1 ] || fail "control characters were not refused cleanly"
+
 # --timezone reads the schedule in that zone and shows its times there
 if [ -f /usr/share/zoneinfo/Asia/Tokyo ]; then
    out=$("$DATEBLOCK" -t -z Asia/Tokyo -c '0 0 9') || fail "dateblock -z exited with an error"
@@ -30,6 +58,13 @@ fi
 [ $? -eq 1 ] || fail "dateblock accepted an unknown timezone"
 "$DATEBLOCK" -t -z ../../../etc/passwd -n 5 >/dev/null 2>&1
 [ $? -eq 1 ] || fail "dateblock accepted a path as a timezone"
+
+# A bad schedule says which field is wrong and why (exit code 1)
+out=$("$DATEBLOCK" -t -c '* 99' 2>&1)
+[ $? -eq 1 ] || fail "a bad minute did not exit with 1"
+echo "$out" | grep -q "minute '99': 99 is outside of 0-59" || fail "a bad minute was not explained: $out"
+out=$("$DATEBLOCK" -t -w 7 2>&1)
+echo "$out" | grep -q "day of week '7': 7 is outside of 0-6" || fail "-w 7 was not explained: $out"
 
 # '*' mixed into a list is refused
 "$DATEBLOCK" -t -c '0 *,5' >/dev/null 2>&1

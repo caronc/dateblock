@@ -26,7 +26,6 @@ BuildRequires:  make
 BuildRequires:  autoconf
 BuildRequires:  automake
 BuildRequires:  libtool
-BuildRequires:  boost-devel
 BuildRequires:  python%{python3_pkgversion}-devel
 # Fedora's python3-devel brings these in; EL9's and EL10's don't
 BuildRequires:  pyproject-rpm-macros

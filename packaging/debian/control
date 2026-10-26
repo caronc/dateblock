@@ -5,7 +5,6 @@ Maintainer: Chris Caron <lead2gold@gmail.com>
 Build-Depends:
  debhelper-compat (= 13),
  dh-sequence-python3,
- libboost-program-options-dev,
  python3-all-dev,
  python3-setuptools,
  pybuild-plugin-pyproject,

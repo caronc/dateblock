@@ -34,23 +34,5 @@ LT_INIT([disable-static])
 # before changing this.  It produces libdateblock.so.1
 AC_SUBST([DATEBLOCK_LT_VERSION], [1:0:0])
 
-# Boost is only needed by the command line tool (option parsing)
-AC_LANG_PUSH([C++])
-AC_CHECK_HEADERS([boost/program_options.hpp], [],
-    [AC_MSG_ERROR([You need the Boost program_options library.])])
-
-dateblock_save_LIBS="$LIBS"
-LIBS="$LIBS -lboost_program_options"
-AC_MSG_CHECKING([for the boost_program_options library])
-AC_LINK_IFELSE(
-    [AC_LANG_PROGRAM([[#include <boost/program_options.hpp>]],
-                     [[boost::program_options::options_description o("x");]])],
-    [AC_MSG_RESULT([yes])],
-    [AC_MSG_RESULT([no])
-     AC_MSG_ERROR([You need the Boost program_options library.])])
-LIBS="$dateblock_save_LIBS"
-AC_SUBST([BOOST_PROGRAM_OPTIONS_LIBS], [-lboost_program_options])
-AC_LANG_POP([C++])
-
 AC_CONFIG_FILES([Makefile src/Makefile tests/Makefile dateblock.pc])
 AC_OUTPUT

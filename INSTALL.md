@@ -9,12 +9,11 @@ You will require the following in order for this to work correctly:
 * libtool
 * make
 * GNU C++ Compiler
-* boost (the `program_options` library; only the command line tool uses it)
 * python 3.9+ with setuptools (optional; for the Python bindings)
 
 On Fedora and RHEL/CentOS/Alma/Rocky:
 ```bash
-sudo dnf install gcc-c++ make autoconf automake libtool boost-devel \
+sudo dnf install gcc-c++ make autoconf automake libtool \
                  python3-devel python3-setuptools python3-pip
 ```
 

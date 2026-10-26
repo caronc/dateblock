@@ -11,7 +11,7 @@ pkgdesc='Block (sleep) until a cron-style moment in time'
 arch=('x86_64' 'aarch64')
 url='https://github.com/caronc/dateblock'
 license=('GPL-2.0-or-later')
-makedepends=('boost' 'python' 'python-setuptools' 'python-build'
+makedepends=('python' 'python-setuptools' 'python-build'
              'python-installer' 'python-wheel')
 source=("$pkgbase-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
 # Replace with the real checksum ('updpkgsums') once v$pkgver is tagged
@@ -39,7 +39,7 @@ check() {
 }
 
 package_dateblock() {
-  depends=('gcc-libs' 'glibc' 'boost-libs')
+  depends=('gcc-libs' 'glibc')
   cd "$pkgbase-$pkgver"
   make DESTDIR="$pkgdir" install
   rm -f "$pkgdir"/usr/lib/*.la

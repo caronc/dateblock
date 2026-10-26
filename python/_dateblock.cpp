@@ -223,11 +223,11 @@ static void SetCronError()
    {
       throw;
    }
-   catch (const std::invalid_argument &)
+   catch (const std::invalid_argument &e)
    {
       if (!PyErr_Occurred())
-         PyErr_SetString(PyExc_SyntaxError,
-               "The cron specified is not formatted correctly.");
+         PyErr_Format(PyExc_SyntaxError,
+               "The cron is not formatted correctly: %s", e.what());
    }
    catch (const std::out_of_range &)
    {

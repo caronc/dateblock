@@ -220,9 +220,10 @@ namespace {
    //  - Missing fields are filled in with '*'.
    //  - A '+N' entry (dateblock format only) jumps straight to the drift
    //    field; nothing may follow it.
-   //  - Returns false if the string has more fields than allowed.
+   //  - Returns false (with 'why' set) if the string has more fields than
+   //    allowed, or a '+' without a drift.
    bool SplitCronString(const string& strIn, bool isISC,
-                        vector<string>& tokens)
+                        vector<string>& tokens, string& why)
    {
       // ISC only processes the first 5 fields, where as
       // otherwise we process the first 7
@@ -244,9 +245,19 @@ namespace {
             pos++;
          string token(strIn, start, pos - start);
 
-         if (drifted || tokens.size() >= token_max)
+         if (drifted)
          {
-            // More entries then expected found
+            why = "nothing may follow the drift (the '+' entry)";
+            ok = false;
+            break;
+         }
+         if (tokens.size() >= token_max)
+         {
+            why = isISC ?
+               "there are too many fields; a crontab entry has 5 (minute, "
+               "hour, day of month, month and day of week)" :
+               "there are too many fields; a cron has at most 7 (second, "
+               "minute, hour, day of month, month, day of week and drift)";
             ok = false;
             break;
          }
@@ -260,7 +271,7 @@ namespace {
             drifted = true;
             if (token.empty())
             {
-               // A '+' with no drift after it
+               why = "a '+' needs the drift after it (ie: '+20')";
                ok = false;
                break;
             }
@@ -275,11 +286,32 @@ namespace {
       return ok;
    }
 
+   // 'text' for an error message: shortened if it is very long, and with
+   // control characters written as \xNN so they can't upset a terminal or
+   // a log file
+   string Shown(const string& text)
+   {
+      string shown;
+      for (size_t i = 0; i < text.size() && shown.size() < 40; i++)
+      {
+         unsigned char c = (unsigned char)text[i];
+         if (c < 0x20 || c == 0x7f)
+         {
+            const char *hex = "0123456789abcdef";
+            shown += string("\\x") + hex[c >> 4] + hex[c & 0xf];
+         }
+         else
+            shown += (char)c;
+      }
+      return (shown.size() < text.size() && shown.size() >= 40) ?
+             shown + "..." : shown;
+   }
+
    // Reads the number starting at 'pos' (moving 'pos' past it), stopping
-   // at 'end'.  Fails if there is no number there or it is outside of 'lo'
-   // to 'hi'.
+   // at 'end'.  Fails (with 'why' set) if there is no number there or it
+   // is outside of 'lo' to 'hi'.
    bool ReadNumber(const string& str, size_t& pos, size_t end, int lo, int hi,
-                   long long& out)
+                   long long& out, string& why)
    {
       size_t start = pos;
       out = 0;
@@ -287,10 +319,29 @@ namespace {
       {
          out = out * 10 + (str[pos] - '0');
          if (out > hi)
+         {
+            while (pos < end && isdigit((unsigned char)str[pos]))
+               pos++;
+            why = Shown(str.substr(start, pos - start)) + " is outside of " +
+                  to_string(lo) + "-" + to_string(hi);
             return false;
+         }
          pos++;
       }
-      return pos > start && out >= lo;
+      if (pos == start)
+      {
+         why = (pos < end) ?
+            "'" + Shown(str.substr(pos, end - pos)) + "' is not a number" :
+            "a number is missing at the end";
+         return false;
+      }
+      if (out < lo)
+      {
+         why = to_string(out) + " is outside of " + to_string(lo) + "-" +
+               to_string(hi);
+         return false;
+      }
+      return true;
    }
 
    // The calendar (leap years and weekdays included) repeats every 400
@@ -566,9 +617,10 @@ namespace {
    //  - Each entry is handed to 'add(first, last, step)', which may refuse
    //    it by returning false.
    //  - 'given' is false when the field is '*' (or empty).
+   //  - Returns false (with 'why' set) if it is not formatted correctly.
    template <class Add>
    bool ReadField(const string& str, int lo, int hi, bool stepFromLowest,
-                  Add& add, bool& given)
+                  Add& add, bool& given, string& why)
    {
       given = false;
       if (str.empty())
@@ -577,7 +629,11 @@ namespace {
       // More entries than a field can ever hold (ie: '0,0,0,...' repeated
       // a million times) are refused before anything is read
       if (count(str.begin(), str.end(), ',') >= CRON_MAX_FIELD_VALUES)
+      {
+         why = "it has more than " + to_string(CRON_MAX_FIELD_VALUES) +
+               " entries";
          return false;
+      }
 
       bool star = false;
       size_t entries = 0;
@@ -588,7 +644,11 @@ namespace {
          if (end == string::npos)
             end = str.size();
          if (end == start)
+         {
+            why = "an entry is empty (two commas in a row, or a comma at "
+                  "the start or end)";
             return false;
+         }
          entries++;
 
          if (end - start == 1 && str[start] == '*')
@@ -604,22 +664,33 @@ namespace {
             {
                // Modulus
                pos += (str[start] == '/') ? 1 : 2;
-               if (!ReadNumber(str, pos, end, lo, hi, step) || step == 0)
+               if (!ReadNumber(str, pos, end, lo, hi, step, why))
+               {
+                  why = "the step after '/': " + why;
                   return false;
+               }
+               if (step == 0)
+               {
+                  why = "a step of 0 is not allowed";
+                  return false;
+               }
                first = stepFromLowest ? lo : 0;
                last = hi;
             }
             else
             {
-               if (!ReadNumber(str, pos, end, lo, hi, first))
+               if (!ReadNumber(str, pos, end, lo, hi, first, why))
                   return false;
                last = first;
                if (pos < end && str[pos] == '-')
                {
                   // Range
                   pos++;
-                  if (!ReadNumber(str, pos, end, lo, hi, last))
+                  if (!ReadNumber(str, pos, end, lo, hi, last, why))
+                  {
+                     why = "the end of the range: " + why;
                      return false;
+                  }
                   if (first > last)
                   {
                      long long tmp = first;
@@ -631,13 +702,27 @@ namespace {
                   if (pos < end && str[pos] == '/')
                   {
                      pos++;
-                     if (!ReadNumber(str, pos, end, 1, hi, step))
+                     if (!ReadNumber(str, pos, end, 1, hi, step, why))
+                     {
+                        why = "the step after '/': " + why;
                         return false;
+                     }
                   }
                }
             }
-            if (pos != end || !add(first, last, step))
+            if (pos != end)
+            {
+               why = "'" + Shown(str.substr(pos, end - pos)) +
+                     "' is not understood (each entry is *, x, x-y, x-y/z "
+                     "or */x)";
                return false;
+            }
+            if (!add(first, last, step))
+            {
+               why = "it has too many values (a field holds at most " +
+                     to_string(CRON_MAX_FIELD_VALUES) + ")";
+               return false;
+            }
             given = true;
          }
 
@@ -645,7 +730,12 @@ namespace {
             break;
          start = end + 1;
       }
-      return !(star && entries > 1);
+      if (star && entries > 1)
+      {
+         why = "'*' can't be mixed with other entries (use '*' on its own)";
+         return false;
+      }
+      return true;
    }
 
    // Sets the bit of every value an entry allows (time fields; they all
@@ -692,17 +782,30 @@ namespace {
       }
    };
 
-   // Parses every field (seconds to drift); false if any of them is not
+   // The name of each field, for error messages
+   const char *FieldName(int field)
+   {
+      const char *names[F_COUNT] = {
+         "second", "minute", "hour", "day of month", "month", "day of week",
+         "drift" };
+      return names[field];
+   }
+
+   // Parses every field (seconds to drift).  Returns false (with 'why' set
+   // to the field and what is wrong with it) if any of them is not
    // formatted correctly.  'stepFromLowest' is crontab's reading of '*/x'.
    bool ParseFields(const string fields[F_COUNT], bool stepFromLowest,
-                    CronFields& out)
+                    CronFields& out, string& why)
    {
       for (int i = 0; i < F_DRIFT; i++)
       {
          AddToMask add = { 0, FieldLow(i) };
          if (!ReadField(fields[i], FieldLow(i), FieldHigh(i), stepFromLowest,
-                        add, out.given[i]))
+                        add, out.given[i], why))
+         {
+            why = string(FieldName(i)) + " '" + Shown(fields[i]) + "': " + why;
             return false;
+         }
          out.mask[i] = add.mask;
          out.given[i] = out.given[i] && add.mask != 0;
       }
@@ -711,14 +814,24 @@ namespace {
       AddToList add = { out.drifts };
       bool given;
       if (!ReadField(fields[F_DRIFT], FieldLow(F_DRIFT), FieldHigh(F_DRIFT),
-                     stepFromLowest, add, given))
+                     stepFromLowest, add, given, why))
+      {
+         why = "drift '" + Shown(fields[F_DRIFT]) + "': " + why;
          return false;
+      }
       Tidy(out.drifts);
-      return out.drifts.size() <= CRON_MAX_FIELD_VALUES;
+      if (out.drifts.size() > CRON_MAX_FIELD_VALUES)
+      {
+         why = "drift '" + Shown(fields[F_DRIFT]) + "': it has more than " +
+               to_string(CRON_MAX_FIELD_VALUES) + " different values";
+         return false;
+      }
+      return true;
    }
 
-   // Splits and parses a whole cron string.  Throws std::invalid_argument if
-   // it is not formatted correctly.
+   // Splits and parses a whole cron string.  Throws std::invalid_argument
+   // saying what is wrong (ie: "minute '99': 99 is outside of 0-59") if it
+   // is not formatted correctly.
    //
    //         Dateblock Format
    //
@@ -746,17 +859,15 @@ namespace {
    void ParseCron(const string& strIn, bool isISC, CronFields& out)
    {
       vector<string> tokens;
-      if (!SplitCronString(strIn, isISC, tokens))
-      {
-         // Too many fields, or something after the drift
-         throw invalid_argument("The cron is not formatted correctly.");
-      }
+      string why;
+      if (!SplitCronString(strIn, isISC, tokens, why))
+         throw invalid_argument(why);
 
       out.isISC = isISC;
       if (!isISC)
       {
-         if (!ParseFields(&tokens[0], false, out))
-            throw invalid_argument("The cron is not formatted correctly.");
+         if (!ParseFields(&tokens[0], false, out, why))
+            throw invalid_argument(why);
          out.domStar = out.dowStar = true;
          return;
       }
@@ -764,8 +875,8 @@ namespace {
       // ISC has no seconds or drift field ('*' means not given)
       const string fields[F_COUNT] = {
          "*", tokens[0], tokens[1], tokens[2], tokens[3], tokens[4], "*" };
-      if (!ParseFields(fields, true, out))
-         throw invalid_argument("The cron is not formatted correctly.");
+      if (!ParseFields(fields, true, out, why))
+         throw invalid_argument(why);
 
       // crontab(5) treats a day field starting with '*' as unrestricted
       out.domStar = (tokens[2][0] == '*');
@@ -1499,7 +1610,8 @@ bool Date::CronValid(const string& sSecOffset,
       sSecOffset, sMinOffset, sHourOffset, sDomOffset,
       sMonthOffset, sDowOffset, sDriftOffset };
    CronFields f;
-   return ParseFields(fields, false, f);
+   string why;
+   return ParseFields(fields, false, f, why);
 }
 
 //------------------------------------------------
@@ -1539,9 +1651,10 @@ const Date Date::Cron(const string& sSecOffset,
       sSecOffset, sMinOffset, sHourOffset, sDomOffset,
       sMonthOffset, sDowOffset, sDriftOffset };
    CronFields f;
-   if (!ParseFields(fields, false, f))
+   string why;
+   if (!ParseFields(fields, false, f, why))
    {
-      throw invalid_argument("The cron is not formatted correctly.");
+      throw invalid_argument(why);
    }
    f.isISC = false;
    f.domStar = f.dowStar = true;

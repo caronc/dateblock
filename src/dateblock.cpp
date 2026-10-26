@@ -20,6 +20,7 @@
 #endif
 
 #include <iostream>
+#include <map>
 #include <string>
 #include <stdexcept>
 #include <vector>
@@ -29,12 +30,230 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <boost/program_options.hpp>
 #include "Date.h"
 #include "dateblock.h"
 
-namespace po = boost::program_options;
 using namespace std;
+
+// The options dateblock understands
+struct Option
+{
+   char shortName;       // ie: 'n' for -n
+   const char *longName; // ie: "minute" for --minute
+   bool takesValue;
+   const char *help;     // lines after the first are indented to line up
+};
+
+static const Option OPTIONS[] = {
+   {'h', "help", false, "Show this help screen."},
+   {'t', "test", false, "Test (Do not block for the specified period)"},
+   {'v', "verbose", false, "Verbose mode"},
+   {'i', "isc", false, "ISC mode; this only works when paired with --cron\n"
+                       "(-c) switch."},
+   {'s', "second", true, "Second (0-59)"},
+   {'n', "minute", true, "Minute (0-59)"},
+   {'o', "hour", true, "Hour (0-23)"},
+   {'d', "dom", true, "Day of Month (1-31)"},
+   {'m', "month", true, "Month (1-12) {Jan=1,...,Dec=12}"},
+   {'w', "dow", true, "Day of Week (0-6) {Sun=0,...,Sat=6}"},
+   {'c', "cron", true, "Cron string formatting"},
+   {'x', "drift", true, "Additional drift time (in seconds)."},
+   {'z', "timezone", true, "Timezone to read the schedule in (ie:\n"
+                           "America/Toronto); defaults to this computer's."},
+};
+static const size_t OPTION_COUNT = sizeof(OPTIONS) / sizeof(OPTIONS[0]);
+
+// What was given on the command line
+struct CommandLine
+{
+   map<string, string> given;   // long name -> value ("" for a flag)
+   vector<char *> command;      // the command to run once the time is reached
+
+   bool Has(const char *name) const { return given.count(name) > 0; }
+   string Get(const char *name) const
+   {
+      map<string, string>::const_iterator itr = given.find(name);
+      return (itr == given.end()) ? string() : itr->second;
+   }
+};
+
+// Lists the options (for --help)
+static void PrintOptions()
+{
+   cerr << "Allowed options:" << endl;
+   for (size_t i = 0; i < OPTION_COUNT; i++)
+   {
+      string label = string("  -") + OPTIONS[i].shortName + " [ --" +
+                     OPTIONS[i].longName + " ]" +
+                     (OPTIONS[i].takesValue ? " arg" : "");
+      label.resize(label.size() < 24 ? 24 : label.size() + 1, ' ');
+      cerr << label;
+      for (const char *c = OPTIONS[i].help; *c; c++)
+      {
+         cerr << *c;
+         if (*c == '\n')
+            cerr << string(24, ' ');
+      }
+      cerr << endl;
+   }
+   cerr << endl;
+}
+
+// True if 'arg' can be the value of the option before it: it may not look
+// like an option itself (a lone '-' is fine), so a forgotten value is
+// reported instead of quietly swallowing the next option
+static bool IsValue(const char *arg)
+{
+   return arg != NULL && (arg[0] != '-' || arg[1] == '\0');
+}
+
+// Records option 'opt' with 'value'; each option may only be given once
+static bool Store(CommandLine& out, const Option& opt, const string& value,
+                  string& error)
+{
+   if (out.Has(opt.longName))
+   {
+      error = string("option '--") + opt.longName +
+              "' was given more than once";
+      return false;
+   }
+   out.given[opt.longName] = value;
+   return true;
+}
+
+// The option called --'name', which may be shortened as long as only one
+// option starts with it (ie: --min for --minute); NULL (with 'error' set)
+// if there is no such option, or more than one
+static const Option *FindLong(const string& name, string& error)
+{
+   vector<const Option *> matches;
+   for (size_t i = 0; i < OPTION_COUNT; i++)
+   {
+      if (name == OPTIONS[i].longName)
+         return &OPTIONS[i];
+      if (!name.empty() &&
+          string(OPTIONS[i].longName).compare(0, name.size(), name) == 0)
+         matches.push_back(&OPTIONS[i]);
+   }
+   if (matches.size() == 1)
+      return matches[0];
+
+   if (matches.empty())
+   {
+      error = "unrecognised option '--" + name + "'";
+   }
+   else
+   {
+      error = "option '--" + name + "' is ambiguous (it could be";
+      for (size_t i = 0; i < matches.size(); i++)
+         error += string(i ? ", --" : " --") + matches[i]->longName;
+      error += ")";
+   }
+   return NULL;
+}
+
+// Reads argv into 'out'.
+//  - Short options can be combined (-tv) and take their value attached
+//    (-n5) or as the next argument (-n 5).
+//  - Long options take theirs as --name=value or --name value.
+//  - A value given as the next argument may not start with '-'; it would
+//    be another option (ie: '-n -t' is missing the minute).
+//  - The command to run starts at '--', or at the first argument that
+//    isn't one of our options or an option's value.  Everything from
+//    there on belongs to the command (like sudo or nice), so its own
+//    options (ie: ls -l) are never taken for ours.
+// Returns false (with 'error' set) if something isn't understood.
+static bool ParseCommandLine(int argc, char **argv, CommandLine& out,
+                             string& error)
+{
+   for (int i = 1; i < argc; i++)
+   {
+      string arg = (argv[i] != NULL) ? argv[i] : "";
+      if (arg == "--" || arg.size() < 2 || arg[0] != '-')
+      {
+         for (int c = (arg == "--") ? i + 1 : i; c < argc; c++)
+            out.command.push_back(argv[c]);
+         return true;
+      }
+
+      if (arg[1] == '-')
+      {
+         // --name or --name=value
+         string name = arg.substr(2), value;
+         size_t equals = name.find('=');
+         bool attached = (equals != string::npos);
+         if (attached)
+         {
+            value = name.substr(equals + 1);
+            name.resize(equals);
+         }
+         const Option *opt = FindLong(name, error);
+         if (opt == NULL)
+            return false;
+         if (!opt->takesValue && attached)
+         {
+            error = string("option '--") + opt->longName +
+                    "' does not take a value";
+            return false;
+         }
+         if (opt->takesValue && attached && value.empty())
+         {
+            error = string("option '--") + opt->longName +
+                    "' needs a value after the '='";
+            return false;
+         }
+         if (opt->takesValue && !attached)
+         {
+            if (i + 1 >= argc || !IsValue(argv[i + 1]))
+            {
+               error = string("option '--") + opt->longName +
+                       "' needs a value";
+               return false;
+            }
+            value = argv[++i];
+         }
+         if (!Store(out, *opt, value, error))
+            return false;
+         continue;
+      }
+
+      // -abc: flags, until one that takes a value (the rest of the
+      // argument, or the next one)
+      for (size_t c = 1; c < arg.size(); c++)
+      {
+         const Option *opt = NULL;
+         for (size_t o = 0; o < OPTION_COUNT && opt == NULL; o++)
+            if (OPTIONS[o].shortName == arg[c])
+               opt = &OPTIONS[o];
+         if (opt == NULL)
+         {
+            error = string("unrecognised option '-") + arg[c] + "'";
+            return false;
+         }
+         if (!opt->takesValue)
+         {
+            if (!Store(out, *opt, "", error))
+               return false;
+            continue;
+         }
+
+         string value;
+         if (c + 1 < arg.size())
+            value = arg.substr(c + 1);
+         else if (i + 1 < argc && IsValue(argv[i + 1]))
+            value = argv[++i];
+         else
+         {
+            error = string("option '-") + opt->shortName + "' needs a value";
+            return false;
+         }
+         if (!Store(out, *opt, value, error))
+            return false;
+         break;
+      }
+   }
+   return true;
+}
 
 //------------------------------------------------
 //
@@ -186,91 +405,18 @@ static bool KnownTimeZone(const string& name)
    return false;
 }
 
-// Where the command to run (if any) starts in argv: at '--', or at the
-// first argument that isn't one of our options or an option's value.
-// Everything from there on belongs to the command (like sudo or nice), so
-// its own options (ie: ls -l) are never taken for ours.  Returns argc if
-// there is no command.
-static int CommandStart(int argc, char **argv)
+// Everything dateblock does; main() only adds a safety net around it
+static int Run(int argc, char **argv)
 {
-   // Short options that take a value, and the long names
-   const string valueShort = "snodmwcxz";
-   const char *valueLong[] = {"second", "minute", "hour", "dom", "month",
-                              "dow", "cron", "drift", "timezone"};
-   const char *flagLong[] = {"help", "test", "verbose", "isc"};
-   const unsigned values = sizeof(valueLong)/sizeof(valueLong[0]);
-   const unsigned flags = sizeof(flagLong)/sizeof(flagLong[0]);
-
-   for (int i = 1; i < argc; i++)
+   CommandLine cl;
+   string error;
+   if (!ParseCommandLine(argc, argv, cl, error))
    {
-      string arg = argv[i];
-      if (arg == "--" || arg.size() < 2 || arg[0] != '-')
-      {
-         return i;
-      }
-
-      if (arg[1] == '-')
-      {
-         // --name or --name=value.  A name may be shortened (--min), the
-         // same way the option parser allows.
-         if (arg.find('=') != string::npos)
-         {
-            continue;
-         }
-         string name = arg.substr(2);
-         bool exact = false, takesValue = false;
-         unsigned matches = 0;
-         for (unsigned v = 0; v < values + flags; v++)
-         {
-            string option = (v < values) ? valueLong[v] : flagLong[v - values];
-            if (option == name)
-            {
-               exact = true;
-               takesValue = (v < values);
-               break;
-            }
-            if (option.compare(0, name.size(), name) == 0)
-            {
-               matches++;
-               takesValue = (v < values);
-            }
-         }
-         if (takesValue && (exact || matches == 1))
-         {
-            i++;
-         }
-         continue;
-      }
-
-      // -abc: flags, until one that takes a value (the rest of the
-      // argument, or the next one)
-      for (size_t c = 1; c < arg.size(); c++)
-      {
-         if (valueShort.find(arg[c]) != string::npos)
-         {
-            if (c == arg.size() - 1)
-            {
-               i++;
-            }
-            break;
-         }
-      }
+      cerr << "Error parsing command line: " << error << endl;
+      cerr << "Exiting." << endl;
+      return 255;
    }
-   return argc;
-}
-
-int main(int argc, char **argv)
-{
-   // Split off the command to run once the time is reached (if any)
-   int commandAt = CommandStart(argc, argv);
-   vector<char *> command;
-   for (int i = commandAt; i < argc; i++)
-   {
-      if (i > commandAt || string(argv[i]) != "--")
-      {
-         command.push_back(argv[i]);
-      }
-   }
+   vector<char *>& command = cl.command;
 
    Date dObjStart;
    Date dObjFinish;
@@ -286,63 +432,20 @@ int main(int argc, char **argv)
    string sShown;     // the schedule as typed, for error messages
    bool useISC = false;
 
-   // Declare the supported options.
-   po::options_description poAllOptions("Allowed options");
-   po::variables_map poVariablesMap;
-   poAllOptions.add_options()
-       ("help,h", "Show this help screen.")
-       ("test,t", "Test (Do not block for the specified period)")
-       ("verbose,v", "Verbose mode")
-       ("isc,i", "ISC mode; this only works when paired with --cron (-c) "
-        "switch.")
-       ("second,s", po::value<string>(), "Second (0-59)")
-       ("minute,n", po::value<string>(), "Minute (0-59)")
-       ("hour,o", po::value<string>(), "Hour (0-23)")
-       ("dom,d", po::value<string>(), "Day of Month (1-31)")
-       ("month,m", po::value<string>(), "Month (1-12) {Jan=1,...,Dec=12}")
-       ("dow,w", po::value<string>(), "Day of Week (0-6) {Sun=0,...,Sat=6}")
-       ("cron,c", po::value<string>(), "Cron string formatting")
-       ("drift,x", po::value<string>(), "Additional drift time (in seconds).")
-       ("timezone,z", po::value<string>(), "Timezone to read the schedule in "
-        "(ie: America/Toronto); defaults to this computer's.")
-   ;
-
-   // Parse all the options and ensure the critical ones have been defined.
-   // It's up to the application mainline to ensure application-specific
-   // arguments have been specified on the command-line.
-   try
-   {
-      po::store(
-            po::parse_command_line(commandAt, argv, poAllOptions),
-            poVariablesMap);
-      po::notify(poVariablesMap);
-   }
-   catch(exception& e)
-   {
-      cerr << "Error parsing command line: " << e.what() << endl;
-      cerr << "Exiting." << endl;
-      return -1;
-   }
-   if (poVariablesMap.count("help"))
+   if (cl.Has("help"))
    {
       ProgramDetails();
-      cerr << poAllOptions << endl;
+      PrintOptions();
       ProgramExamples();
       return 0;
    }
-   else if (! ( (poVariablesMap.count("cron")) ||
-         (poVariablesMap.count("second")) ||
-         (poVariablesMap.count("minute")) ||
-         (poVariablesMap.count("hour")) ||
-         (poVariablesMap.count("dom")) ||
-         (poVariablesMap.count("month")) ||
-         (poVariablesMap.count("dow"))
-         )
-      )
+   else if (!(cl.Has("cron") || cl.Has("second") || cl.Has("minute") ||
+              cl.Has("hour") || cl.Has("dom") || cl.Has("month") ||
+              cl.Has("dow")))
    {
       cerr << "Error: You must specify at least one option." << endl;
       ProgramDetails();
-      cerr << poAllOptions << endl;
+      PrintOptions();
       ProgramExamples();
       return 1;
    }
@@ -351,9 +454,9 @@ int main(int argc, char **argv)
    // this program's own TZ changes; the moment it unblocks at is the same
    // everywhere.
    string sTimeFmt = "%Y-%m-%d %H:%M:%S";
-   if (poVariablesMap.count("timezone"))
+   if (cl.Has("timezone"))
    {
-      string zone = poVariablesMap["timezone"].as<string>();
+      string zone = cl.Get("timezone");
       if (!KnownTimeZone(zone))
       {
          cerr << "Error: Unknown timezone '" << zone << "'" << endl;
@@ -365,46 +468,46 @@ int main(int argc, char **argv)
       sTimeFmt += " %Z";
    }
 
-   if (!poVariablesMap.count("cron"))
+   if (!cl.Has("cron"))
    {
       // Store Second
-      if ((poVariablesMap.count("second")))
+      if (cl.Has("second"))
       {
-         sSecOffset = poVariablesMap["second"].as<string>();
+         sSecOffset = cl.Get("second");
       }
 
       // Store Minute
-      if ((poVariablesMap.count("minute")))
+      if (cl.Has("minute"))
       {
-         sMinOffset = poVariablesMap["minute"].as<string>();
+         sMinOffset = cl.Get("minute");
       }
 
       // Store Hour
-      if ((poVariablesMap.count("hour")))
+      if (cl.Has("hour"))
       {
-         sHourOffset = poVariablesMap["hour"].as<string>();
+         sHourOffset = cl.Get("hour");
       }
 
       // Store DOM of Month
-      if ((poVariablesMap.count("dom")))
+      if (cl.Has("dom"))
       {
-         sDomOffset = poVariablesMap["dom"].as<string>();
+         sDomOffset = cl.Get("dom");
       }
 
       // Store Month
-      if ((poVariablesMap.count("month")))
+      if (cl.Has("month"))
       {
-         sMonthOffset = poVariablesMap["month"].as<string>();
+         sMonthOffset = cl.Get("month");
       }
       // Store DOM of Week
-      if ((poVariablesMap.count("dow")))
+      if (cl.Has("dow"))
       {
-         sDowOffset = poVariablesMap["dow"].as<string>();
+         sDowOffset = cl.Get("dow");
       }
       // Store Drift
-      if ((poVariablesMap.count("drift")))
+      if (cl.Has("drift"))
       {
-         sDriftOffset = poVariablesMap["drift"].as<string>();
+         sDriftOffset = cl.Get("drift");
       }
 
       sShown = sSecOffset + " " + sMinOffset + " " + sHourOffset + " " +
@@ -415,14 +518,14 @@ int main(int argc, char **argv)
    {
       // The whole schedule as one string (a regular crontab entry with
       // --isc)
-      useISC = (poVariablesMap.count("isc") > 0);
-      sCronStr = poVariablesMap["cron"].as<string>();
+      useISC = cl.Has("isc");
+      sCronStr = cl.Get("cron");
       sShown = sCronStr;
    }
 
    try
    {
-      if (poVariablesMap.count("cron"))
+      if (cl.Has("cron"))
       {
          dObjFinish = dObjStart.Cron(sCronStr, useISC);
       }
@@ -433,10 +536,12 @@ int main(int argc, char **argv)
                                      sDriftOffset);
       }
    }
-   catch (const invalid_argument&)
+   catch (const invalid_argument& e)
    {
-      cerr << "Error: Syntax Invalid : '" << sShown << "'" << endl;
-      ProgramExamples();
+      cerr << "Error: Syntax Invalid : '" << sShown << "'" << endl
+           << "       " << e.what() << endl
+           << "Run 'dateblock --help' to see the syntax that is accepted."
+           << endl;
       return 1;
    }
    catch (const runtime_error& e)
@@ -451,7 +556,7 @@ int main(int argc, char **argv)
       return 1;
    }
 
-   if (poVariablesMap.count("verbose") || poVariablesMap.count("test"))
+   if (cl.Has("verbose") || cl.Has("test"))
    {
       cout << "Current Time : "<< dObjStart.Str(sTimeFmt + " (%a)") << endl;
       cout << "Block Until  : "<< dObjFinish.Str(sTimeFmt + " (%a)") << endl;
@@ -466,12 +571,12 @@ int main(int argc, char **argv)
       }
    }
 
-   if (!(poVariablesMap.count("test")))
+   if (!(cl.Has("test")))
    {
       // Keep sleeping if a signal happens to wake us up early
       while (Date::BlockUntil(dObjFinish) > 0);
       Date dObjNow;
-      if (poVariablesMap.count("verbose"))
+      if (cl.Has("verbose"))
       {
          cout << "UnBlock Time : "
               << dObjNow.Str(sTimeFmt) << endl;
@@ -501,4 +606,23 @@ int main(int argc, char **argv)
       }
    }
    return 0;
+}
+
+int main(int argc, char **argv)
+{
+   // Anything unexpected (ie: running out of memory) is reported and ends
+   // dateblock with exit code 1, instead of crashing it
+   try
+   {
+      return Run(argc, argv);
+   }
+   catch (const exception& e)
+   {
+      cerr << "Error: " << e.what() << endl;
+   }
+   catch (...)
+   {
+      cerr << "Error: something unexpected went wrong." << endl;
+   }
+   return 1;
 }

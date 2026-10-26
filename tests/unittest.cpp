@@ -950,6 +950,76 @@ static int CheckParser()
    return 0;
 }
 
+// Bad crons are refused with a message saying which field is wrong and why
+static int CheckErrorMessages()
+{
+   struct Case { const char *cron; bool isISC; const char *says; };
+   const Case cases[] = {
+      {"* 99", false, "minute '99': 99 is outside of 0-59"},
+      {"0 0 0 * * 7", false, "day of week '7': 7 is outside of 0-6"},
+      {"0 0 0 0", false, "day of month '0': 0 is outside of 1-31"},
+      {"* 5,,6", false, "minute '5,,6': an entry is empty"},
+      {"* *,5", false, "minute '*,5': '*' can't be mixed"},
+      {"* 5-", false, "minute '5-': the end of the range: a number is missing"},
+      {"* 5-99", false, "the end of the range: 99 is outside of 0-59"},
+      {"* 1-10/0", false, "the step after '/': 0 is outside of 1-59"},
+      {"* */0", false, "minute '*/0': a step of 0 is not allowed"},
+      {"* abc", false, "minute 'abc': 'abc' is not a number"},
+      {"* 5x", false, "minute '5x': 'x' is not understood"},
+      {"* 5-6-7", false, "'-7' is not understood"},
+      {"* * * * * * * *", false, "there are too many fields; a cron has at most 7"},
+      {"* 5 +20 1", false, "nothing may follow the drift"},
+      {"+", false, "a '+' needs the drift after it"},
+      {"* * * * * * 0-2147483647", false, "drift '0-2147483647': it has too many values"},
+      {"* \x01", false, "minute '\\x01': '\\x01' is not a number"},
+      {"* * * * * *", true, "a crontab entry has 5"},
+      {"60 * * * *", true, "minute '60': 60 is outside of 0-59"}};
+
+   Date start(2025, 1, 15, 3, 10, 0);
+   for (unsigned i = 0; i < sizeof(cases)/sizeof(cases[0]); i++)
+   {
+      string said;
+      try
+      {
+         start.Cron(cases[i].cron, cases[i].isISC);
+      }
+      catch (const invalid_argument& e)
+      {
+         said = e.what();
+      }
+      if (said.find(cases[i].says) == string::npos)
+      {
+         cerr << "FATAL: '" << Shown(cases[i].cron) << "' said '" << said
+              << "', expected '" << cases[i].says << "'" << endl;
+         return 1;
+      }
+   }
+
+   // The same for separate fields, and very long input is shortened
+   string said;
+   try
+   {
+      start.Cron("*", "99", "*");
+   }
+   catch (const invalid_argument& e)
+   {
+      said = e.what();
+   }
+   if (said != "minute '99': 99 is outside of 0-59")
+      return Fail("Cron() with separate fields gave the wrong message");
+   try
+   {
+      start.Cron("* " + string(100000, '5'));
+   }
+   catch (const invalid_argument& e)
+   {
+      said = e.what();
+   }
+   if (said.size() > 200 || said.find("...") == string::npos)
+      return Fail("A very long bad cron was not shortened in its message");
+   return 0;
+}
+
 static int CheckExtras()
 {
    // Setting a date while 'today' is the 31st must not spill into the
@@ -1142,7 +1212,7 @@ int main()
    if (CheckExtras() || CheckLeapYears() || CheckDayMatching() ||
        CheckUnsetFields() || CheckSteps() || CheckHardening() ||
        CheckDriftLists() || CheckDaylightSaving() || CheckTimeZones() ||
-       CheckParser())
+       CheckParser() || CheckErrorMessages())
       return 1;
    return 0;
 }

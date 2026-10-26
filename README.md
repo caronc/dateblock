@@ -317,9 +317,9 @@ command is the C++ tool; install it from the packages or build it from
 source as shown below.
 
 ### From Source
-Assuming you have a C++ compiler, the Boost `program_options` library and
-the standard development tools that usually go with it (make, autoconf,
-automake and libtool), then the following will install everything for you.
+Assuming you have a C++ compiler and the standard development tools that
+usually go with it (make, autoconf, automake and libtool), then the
+following will install everything for you.
 
 ```bash
 ./autogen.sh
@@ -351,18 +351,36 @@ from a fresh checkout; no `./configure` needed:
 # Compile and run all of the tests
 make docker-build
 
-# Build packages
+# Build packages (each one is tested while it builds)
 make docker-rpm                 # Fedora 44 RPMs
 make docker-rpm DISTRO=el9      # EL9 RPMs (or DISTRO=el10)
+make docker-rpm-all             # the RPMs for Fedora 44, EL9 and EL10
 make docker-deb                 # Debian 13 .deb packages
 make docker-arch                # Arch Linux packages
 make docker-all                 # every one of the above
 
+# Build for 64-bit ARM instead (ie: Raspberry Pi); runs under emulation,
+# so it needs qemu-user-static and is much slower (no Arch Linux image)
+make docker-rpm ARCH=aarch64
+
+# The Python source package and Linux wheels (needs uv or pipx)
+make docker-pypi
+make docker-pypi PYPI_ARCHS="x86_64 aarch64"
+
+# Rebuild the man page after editing packaging/man/dateblock.md
+make docker-man
+
 # Open a shell inside the build container to poke around
 make docker-shell
+
+# Clean up: 'make clean' removes dist/ and the other build files in the
+# checkout; 'make release-clean' also removes the build images
+make clean
+make release-clean
 ```
 
-- Results are written to `dist/<distro>/`.
+- Results are written to `dist/<distro>/` (`dist/<distro>-aarch64/` for
+  ARM, `dist/pypi/` for Python).
 - Your checkout is mounted read-only, so the container never changes it.
 - Podman is used if Docker isn't installed; set `CONTAINER=podman` to
   prefer it.

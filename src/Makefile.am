@@ -26,7 +26,7 @@ dateblockinclude_HEADERS = Date.h
 
 bin_PROGRAMS = dateblock
 dateblock_SOURCES = dateblock.cpp dateblock.h
-dateblock_LDADD = libdateblock.la $(BOOST_PROGRAM_OPTIONS_LIBS)
+dateblock_LDADD = libdateblock.la
 
 # Installing into a staging folder (make install DESTDIR=..., as every
 # package build does) makes libtool print harmless warnings: the library

@@ -257,6 +257,14 @@ class DateblockTests(unittest.TestCase):
         with self.assertRaises(SyntaxError):
             db("* 5 +20 1", block=False)
 
+    def test_syntax_error_says_what_is_wrong(self):
+        with self.assertRaises(SyntaxError) as raised:
+            db("* 99", block=False)
+        self.assertIn("minute '99': 99 is outside of 0-59", str(raised.exception))
+        with self.assertRaises(SyntaxError) as raised:
+            db("0 0 *,13 * 1", isc=True, block=False)
+        self.assertIn("day of month '*,13'", str(raised.exception))
+
     def test_impossible_cron_raises_value_error(self):
         with self.assertRaises(ValueError):
             db("0 0 0 31 2 *", block=False)
