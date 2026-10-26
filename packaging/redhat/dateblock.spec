@@ -126,7 +126,7 @@ export PYTHONPATH=%{buildroot}%{python3_sitearch}
 %files -n python%{python3_pkgversion}-dateblock -f %{pyproject_files}
 
 %changelog
-* Sat Oct 24 2026 Chris Caron <lead2gold@gmail.com> - 2.0.0-1
+* Mon Oct 26 2026 Chris Caron <lead2gold@gmail.com> - 2.0.0-1
 - Updated to version 2.0.0
 - Project renamed from datetools to dateblock; datemath has been retired
 - libdateblock is now a shared library (dateblock-libs and dateblock-devel)
