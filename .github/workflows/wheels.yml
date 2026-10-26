@@ -19,6 +19,11 @@ on:
 permissions:
   contents: read
 
+# Pinned, since the publish job runs with the right to upload to PyPI: the
+# actions to exact commits (a tag such as @v7 can be moved), and the build
+# tools to the versions in .github/release-tools/requirements.txt.
+# Dependabot (.github/dependabot.yml) opens a pull request when any of them
+# has a new release.
 jobs:
   wheels:
     name: Wheels (${{ matrix.os }})
@@ -30,10 +35,10 @@ jobs:
         # macos-latest builds both arm64 and x86_64 macOS wheels
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
       - name: Build and test wheels
-        uses: pypa/cibuildwheel@v4.3.4
+        uses: pypa/cibuildwheel@b9e566a2b284570af229f6c2a33673410d0389a3  # v4.3.4
         env:
           CIBW_ARCHS_MACOS: x86_64 arm64
 
@@ -41,13 +46,13 @@ jobs:
     name: Source package
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
       - name: Build source package
-        run: pipx run build --sdist
+        run: pipx run "$(grep '^build==' .github/release-tools/requirements.txt)" --sdist
 
       - name: Check the PyPI page will render
-        run: pipx run twine check --strict dist/*
+        run: pipx run "$(grep '^twine==' .github/release-tools/requirements.txt)" check --strict dist/*
 
   # Version tags only, and only once every job above has passed
   publish:
@@ -64,17 +69,17 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
 
       - name: Build wheels (already tested above)
-        uses: pypa/cibuildwheel@v4.3.4
+        uses: pypa/cibuildwheel@b9e566a2b284570af229f6c2a33673410d0389a3  # v4.3.4
         env:
           CIBW_ARCHS_MACOS: x86_64 arm64
           CIBW_TEST_SKIP: "*"
 
       - name: Build source package
         if: matrix.os == 'ubuntu-latest'
-        run: pipx run build --sdist --outdir wheelhouse
+        run: pipx run "$(grep '^build==' .github/release-tools/requirements.txt)" --sdist --outdir wheelhouse
 
       - name: Upload to PyPI
         shell: bash

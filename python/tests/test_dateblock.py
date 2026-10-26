@@ -265,6 +265,42 @@ class DateblockTests(unittest.TestCase):
             db("0 0 *,13 * 1", isc=True, block=False)
         self.assertIn("day of month '*,13'", str(raised.exception))
 
+    def test_overlong_cron_raises_syntax_error(self):
+        with self.assertRaises(SyntaxError) as raised:
+            db("*" * 70000, block=False)
+        self.assertIn("too long", str(raised.exception))
+
+    def test_aware_reference_with_a_broken_timestamp(self):
+        # A datetime subclass can make timestamp() return anything
+        class Odd(datetime):
+            def timestamp(self):
+                return self.value
+
+        for value in (float("inf"), float("nan"), 1e300, -1e300):
+            ref = Odd(2025, 1, 1, tzinfo=timezone.utc)
+            ref.value = value
+            with self.assertRaises(OverflowError):
+                db("*/1", ref=ref, block=False)
+
+    def test_tzinfo_returning_something_odd_raises_type_error(self):
+        # A tzinfo's fromutc() can return anything, and Python doesn't
+        # check it
+        class Odd(tzinfo):
+            def utcoffset(self, dt):
+                return timedelta(0)
+
+            def dst(self, dt):
+                return timedelta(0)
+
+            def fromutc(self, dt):
+                return self.result
+
+        for result in (None, 42, "2025-01-01"):
+            zone = Odd()
+            zone.result = result
+            with self.assertRaises(TypeError):
+                db("*/1", ref=datetime(2025, 1, 1, tzinfo=zone), block=False)
+
     def test_impossible_cron_raises_value_error(self):
         with self.assertRaises(ValueError):
             db("0 0 0 31 2 *", block=False)

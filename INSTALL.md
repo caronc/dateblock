@@ -9,6 +9,9 @@ You will require the following in order for this to work correctly:
 * libtool
 * make
 * GNU C++ Compiler
+* a 64-bit `time_t` (every 64-bit system, and current 32-bit ARM Linux;
+  older 32-bit systems can't hold dates past 2038, so the build refuses
+  them)
 * python 3.9+ with setuptools (optional; for the Python bindings)
 
 On Fedora and RHEL/CentOS/Alma/Rocky:

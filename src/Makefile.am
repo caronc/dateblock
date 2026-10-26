@@ -25,7 +25,7 @@ dateblockincludedir = $(includedir)/dateblock
 dateblockinclude_HEADERS = Date.h
 
 bin_PROGRAMS = dateblock
-dateblock_SOURCES = dateblock.cpp dateblock.h
+dateblock_SOURCES = dateblock.cpp
 dateblock_LDADD = libdateblock.la
 
 # Installing into a staging folder (make install DESTDIR=..., as every

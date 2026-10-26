@@ -141,7 +141,12 @@ docker-shell: docker-image
 # Raspberry Pi) wheels; that runs under emulation (needs qemu-user-static)
 # and is slow.  macOS and Windows wheels can only be built on those systems
 # (see .github/workflows/wheels.yml).
-CIBUILDWHEEL_VERSION = 4.3.4
+# The tool versions come from .github/release-tools/requirements.txt (the same
+# ones the GitHub workflow uses)
+RELEASE_TOOLS = .github/release-tools/requirements.txt
+BUILD_VERSION = $(shell sed -n 's/^build==//p' $(RELEASE_TOOLS))
+TWINE_VERSION = $(shell sed -n 's/^twine==//p' $(RELEASE_TOOLS))
+CIBUILDWHEEL_VERSION = $(shell sed -n 's/^cibuildwheel==//p' $(RELEASE_TOOLS))
 PYPI_ARCHS ?= native
 PYPI_OUT = dist/pypi
 PYPI_TEST_SKIP = $(if $(PYPI_TEST_ALL),,cp39-* cp310-* cp311-* cp312-* cp313-*)
@@ -152,12 +157,12 @@ docker-pypi:
 	@test -n "$(PYRUN)" || \
 	   { echo "docker-pypi needs uv (uvx) or pipx installed."; exit 1; }
 	rm -rf $(PYPI_OUT)
-	$(PYRUN) --from build pyproject-build --sdist --outdir $(PYPI_OUT) .
+	$(PYRUN) --from build==$(BUILD_VERSION) pyproject-build --sdist --outdir $(PYPI_OUT) .
 	CIBW_CONTAINER_ENGINE=$(notdir $(CONTAINER)) \
 	   CIBW_TEST_SKIP="$(PYPI_TEST_SKIP)" \
 	   $(PYRUN) cibuildwheel==$(CIBUILDWHEEL_VERSION) --platform linux \
 	   --archs "$(PYPI_ARCHS)" --output-dir $(PYPI_OUT) .
-	$(PYRUN) twine check --strict $(PYPI_OUT)/*
+	$(PYRUN) twine==$(TWINE_VERSION) check --strict $(PYPI_OUT)/*
 	@echo "PyPI files written to $(PYPI_OUT)/"
 
 # The files for a GitHub release, in dist/release-<version>/, plus the

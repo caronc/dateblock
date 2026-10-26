@@ -2,96 +2,71 @@
 All notable changes to this project will be documented in this file.
 
 ## [2.0.0] - 2026-10-24
+The project is now called **dateblock** (it used to be datetools).
+
 ### Added
-- Range steps: 'x-y/z' is every z'th value from x to y (ie: '1-10/3' is 1,
-4, 7 and 10).
-- libdateblock shared library (with headers and a pkg-config file) that the
-command line tool and Python bindings both use.
-- `make check` runs the unit tests and command line tests.
-- Packaging for Fedora and RHEL 9/10 (RPM), Debian 13 (.deb) and Arch
-Linux, all kept in packaging/.
-- `make docker-build`, `make docker-rpm`, `make docker-deb`,
-`make docker-arch` and friends build and test everything in a container.
-- The man page now covers every option and is generated from
-packaging/man/dateblock.md.
-- `pip install dateblock` installs the Python library on Linux, macOS and
-Windows (the `dateblock` command is the C++ tool). Wheels are built for
-Python 3.9 to 3.14.
-- `make docker-pypi` builds the PyPI files; `make release` builds every
-package into dist/release/ with checksums.
-- macOS and Windows support in the library (time and sleep functions).
+- Read a schedule in another timezone: `--timezone` (`-z`) on the command
+  line, or a timezone-aware `datetime` in Python.
+- Run a command once the time is reached, ie:
+  `dateblock -n /15 -- ./backup.sh`; dateblock exits with the command's
+  own exit code.
+- Range steps such as `1-10/3` (1, 4, 7 and 10).
+- Error messages that say what is wrong, ie: `minute '99': 99 is outside of
+  0-59`.
+- The `libdateblock` shared library, with headers and a pkg-config file.
+- Packages for Fedora, RHEL 9 and 10, Debian 13, Arch Linux and Homebrew,
+  and Python wheels for Linux, macOS and Windows (Python 3.9 to 3.14).
+- A complete man page.
 
 ### Changed
-- The project has been renamed from datetools to dateblock.
-- Python bindings now target Python 3 (Python 2 is no longer supported),
-and live in a `dateblock` package (`from dateblock import dateblock` still
-works).
-- The project page on PyPI now renders its Markdown description.
-- Python: an unsupported `ref` value raises `TypeError` (was `SyntaxError`),
-and a cron that can never happen raises `ValueError` (instead of exiting
-the interpreter).
-- Python: blocking no longer holds the GIL, and Ctrl-C now interrupts it.
-- Blocking wakes up exactly on the target second.
-- A cron that can never happen (such as February 31st) is reported as an
-error; impossible combinations (such as '30,31' of '2,3') are now skipped
-instead of aborting.
-- Boost is now only needed by the command line tool.
-- A new matching engine works on whole field lists at once instead of
-trying every combination one at a time, so long lists such as
-'0-59 0-59 0-23' are as quick as single values.
-- Fields that are not given only reset to their lowest value when they are
-smaller than the smallest field given, as documented: '/5 * 3,4' is every
-5th second during hours 3 and 4 (minutes are no longer forced to 0).
-- --isc reads a crontab entry the way crontab(5) does: every field except
-the seconds means what it says ('* 3 * * *' is every minute of hour 3), and
-when both day fields are restricted either one may match. '*/x' counts
-from the field's lowest value ('*/5' days are the 1st, 6th, 11th...).
-- A schedule is reported as impossible when nothing matches within 400
-years (one full calendar cycle).
-- Unfinished entries such as '5-' are rejected instead of matching any
-value, and a field may expand to at most 10,000 values.
+- `--isc` reads an entry exactly as crontab(5) does: the day of the month
+  OR the day of the week may match, and `*/5` days are the 1st, 6th, 11th...
+- Fields left out only reset to their lowest value when they are smaller
+  than the smallest field given: `/5 * 3,4` is every 5th second during
+  hours 3 and 4.
+- Unclear entries such as `5-`, `5,,6` and `*,5` are now errors instead of
+  quietly matching something else.
+- Much faster: long lists such as `0-59 0-59 0-23` cost the same as single
+  values.
+- Blocking wakes up exactly on the second, and Ctrl-C interrupts it.
+- Boost is no longer needed.
+- Python: Python 3 only (`from dateblock import dateblock` still works).
+  A bad schedule raises `SyntaxError`, one that never happens raises
+  `ValueError`, and an unsupported `ref` raises `TypeError`.
 
 ### Removed
-- The datemath tool. `date -d` (ie: `date -d '+3 days -2 hours'`) does the
-same job.
+- The datemath tool; `date -d` (ie: `date -d '+3 days -2 hours'`) does the
+  same job.
 
 ### Fixed
-- Date formatting now uses strftime(), fixing %I, %j, %P, %U, %x, %X and %h.
-- Setting a reference date while today is the 31st no longer rolls over
-into the following month.
-- Month lengths are no longer off by a day around daylight saving changes.
-- Rare schedules such as Feb 29th on a given weekday are found instead of
-being reported as impossible.
-- A month-only schedule (ie: '-m 3') starts on the 1st instead of keeping
-today's day of the month.
-- Setting a reference time on a daylight saving change day is no longer an
-hour off.
-- Drift values near 2147483647 no longer overflow into an endless loop.
-- Python: a float `ref` of NaN, infinity or out of range raises
-`OverflowError`, and an unexpected C++ error no longer aborts the
-interpreter.
+- A schedule that never happens (ie: February 31st) is reported as an
+  error, while lists that only partly exist (ie: the 30th and 31st of
+  February and March) find the dates that do.
+- Rare dates such as February 29th on a given weekday are found.
+- Times around daylight saving changes and month ends are correct (ie: the
+  31st no longer rolls into the next month).
+- A month-only schedule (ie: `-m 3`) starts on the 1st.
+- Date formats such as %I, %j, %P, %U, %x, %X and %h print correctly.
+- Very large drift values no longer loop forever.
+- Python: errors no longer end the Python interpreter.
 
 ## [1.0.3] - 2018-05-31
 ### Changed
-- fixed padding issue with dates (padding with a zero)
-- pypi support
+- Fixed the padding of dates (padding with a zero).
+- PyPI support.
 
 ## [1.0.0] - 2017-04-21
 ### Added
-- Drift option now supported inline as part of the cron
-- using a plus (+) you can denote the drift entry in the cron. For example:
-'0 /5 +4' is the same as writing '0 /5 * * * * 4'.  In this example we would
-unblock every 5 minutes but drift an additional 4 seconds.  Inline drifting
-allows multiple drifts such as '0 /5 +15,45' giving the same benifits as the
-other fields do using this option.
-- Internet Systems Consortium (ISC) support added (which is effectively
-support for the standard cron format in addition to the enhanced one provided
-by dateblock.
+- The drift can be given inline in the cron with a plus (+): `0 /5 +4` is
+  the same as `0 /5 * * * * 4` (every 5 minutes, plus 4 seconds), and
+  several drifts work too (`0 /5 +15,45`).
+- Regular crontab entries (Internet Systems Consortium format) with
+  `--isc`.
 
 ## [0.8.1] - 2015-08-17
 ### Changed
-- Fixed bug where month was missing in printout formatting
+- Fixed the month missing from the printed time.
 
 ## [0.8.0] - 2013-10-26
 ### Added
-- Initial commit to GitHub
+- Initial release on GitHub.

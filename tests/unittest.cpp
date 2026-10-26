@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <limits>
+#include <climits>
 #include <sstream>
 #include <string>
 #include "Date.h"
@@ -292,6 +293,16 @@ static int CheckLeapYears()
    if (!Expect("0 0 30 2 1", true, 2025, 3, 1, 0, 0, 0, "2026-02-02 00:00:00"))
       return Fail("Feb 30th OR Monday (isc) should match a Monday");
 
+   // Days a month doesn't have are skipped in that month only: days 20-31
+   // of February and March go from Feb 28th straight to Mar 20th, and
+   // from Mar 31st on to the next February
+   if (!Expect("0 0 0 20-31 2,3", false, 2025, 2, 28, 12, 0, 0, "2025-03-20 00:00:00") ||
+       !Expect("0 0 0 20-31 2,3", false, 2025, 3, 31, 12, 0, 0, "2026-02-20 00:00:00") ||
+       !Expect("0 0 0 20-31 2,3", false, 2024, 2, 28, 12, 0, 0, "2024-02-29 00:00:00") ||
+       !Expect("0 0 20-31 2,3 *", true, 2025, 2, 28, 12, 0, 0, "2025-03-20 00:00:00") ||
+       !Expect("0 0 0 29-31 2", false, 2025, 1, 1, 0, 0, 0, "2028-02-29 00:00:00"))
+      return Fail("Days some months don't have were not skipped");
+
    // Days that never happen
    if (!Expect("0 0 0 30 2", false, 2024, 1, 1, 0, 0, 0, "") ||
        !Expect("0 0 30 2 *", true, 2024, 1, 1, 0, 0, 0, "") ||
@@ -422,8 +433,59 @@ static int CheckHardening()
    dHuge.AddMonth(-2147483647 - 1);
    if (dHuge.AddYear(2147483647))
       return Fail("AddYear() should refuse a year that doesn't fit");
+   Date dDays(2025, 1, 1, 0, 0, 0);
+   if (!dDays.AddDOM(2147483647) || !dDays.AddDOM(-2147483647) ||
+       dDays.Str() != "2025-01-01 00:00:00")
+      return Fail("AddDOM() with a huge value is wrong");
+   if (!dDays.SetYear(2147483000) || dDays.AddDOM(2147483647) ||
+       dDays.Year() != 2147483000)
+      return Fail("AddDOM() should refuse a year that doesn't fit");
    if ((clock() - added) / CLOCKS_PER_SEC > 1)
       return Fail("AddMonth() with a huge value took too long");
+
+   // Adding days walks the calendar, leap days included
+   Date dWalk(2024, 2, 28, 6, 0, 0);
+   if (!dWalk.AddDOM(1) || dWalk.Str() != "2024-02-29 06:00:00" ||
+       !dWalk.AddDOM(1) || dWalk.Str() != "2024-03-01 06:00:00" ||
+       !dWalk.AddDOM(-366) || dWalk.Str() != "2023-03-01 06:00:00" ||
+       !dWalk.AddDOM(146097 + 1) || dWalk.Str() != "2423-03-02 06:00:00" ||
+       !dWalk.AddDOM(-146097 - 1) || dWalk.Str() != "2023-03-01 06:00:00")
+      return Fail("AddDOM() is wrong");
+
+   // Almost a whole 400 year cycle of days, either way, and from close to
+   // the year 3000 (past what some systems' time functions handle)
+   struct
+   {
+      int year;
+      int days;
+      const char *expect;
+   } cycle[] = {
+      {2025, 146095, "2424-12-30 06:00:00"},
+      {2025, 146096, "2424-12-31 06:00:00"},
+      {2025, -146095, "1625-01-03 06:00:00"},
+      {2025, -146096, "1625-01-02 06:00:00"},
+      {2900, 146096, "3299-12-31 06:00:00"},
+      {2025, -1, "2024-12-31 06:00:00"},
+   };
+   for (size_t i = 0; i < sizeof(cycle) / sizeof(cycle[0]); i++)
+   {
+      Date dCycle(cycle[i].year, 1, 1, 6, 0, 0);
+      if (!dCycle.AddDOM(cycle[i].days) || dCycle.Str() != cycle[i].expect)
+      {
+         cerr << "FATAL: " << cycle[i].year << "-01-01 plus "
+              << cycle[i].days << " days gave " << dCycle.Str() << endl;
+         return 1;
+      }
+   }
+
+   // February 29th moved to a year that isn't a leap year is the 28th
+   Date dLeap(2024, 2, 29, 0, 0, 0);
+   Date dLeapSet(2024, 2, 29, 0, 0, 0);
+   Date dLeapKeep(2024, 2, 29, 0, 0, 0);
+   if (!dLeap.AddYear(1) || dLeap.Str() != "2025-02-28 00:00:00" ||
+       !dLeapSet.SetYear(2025) || dLeapSet.Str() != "2025-02-28 00:00:00" ||
+       !dLeapKeep.AddYear(4) || dLeapKeep.Str() != "2028-02-29 00:00:00")
+      return Fail("February 29th moved to another year is wrong");
 
    // '*' mixed with other entries ('*,5') is unclear and refused; steps
    // such as '*/5,3' are fine
@@ -468,11 +530,15 @@ static int CheckHardening()
    if (Date::CronValid(pile) || (clock() - piled) / CLOCKS_PER_SEC > 1)
       return Fail("A pile of overlapping drift ranges was not refused quickly");
 
-   // Very long input (leading zeros, padding) is still read correctly
-   if (!Date::CronValid("0 " + string(100000, '0') + "5") ||
-       !Expect((string(100000, ' ') + "0 5").c_str(), false,
+   // Long input (leading zeros, padding) is still read correctly, up to
+   // 64 KiB; anything longer is refused before it is looked at
+   if (!Date::CronValid("0 " + string(60000, '0') + "5") ||
+       !Expect((string(60000, ' ') + "0 5").c_str(), false,
                2025, 1, 15, 3, 10, 0, "2025-01-15 04:05:00"))
       return Fail("Long padded input was not read correctly");
+   if (Date::CronValid(string(65537, ' ') + "0 5") ||
+       Date::CronValid("*", string(65537, '5'), "*"))
+      return Fail("Input over 64 KiB was not refused");
 
    // Dates before 1970 and after the year 3000 work too (Windows' own date
    // functions can't do them; the unittest-narrow build checks that)
@@ -565,6 +631,15 @@ static int CheckDaylightSaving()
           !dSet.SetMonth(12) || dSet.Str() != "2025-12-15 12:00:00" ||
           !dYear.SetMonth(7) || dYear.Str() != "2025-07-15 12:00:00")
          rc = Fail("A month change moved the clock time");
+
+      // Adding days keeps the clock time when the clocks change
+      Date dSpring(2025, 3, 8, 12, 0, 0);
+      Date dFall(2025, 11, 1, 12, 0, 0);
+      Date dBack(2025, 3, 10, 12, 0, 0);
+      if (!dSpring.AddDOM(1) || dSpring.Str() != "2025-03-09 12:00:00" ||
+          !dFall.AddDOM(1) || dFall.Str() != "2025-11-02 12:00:00" ||
+          !dBack.AddDOM(-2) || dBack.Str() != "2025-03-08 12:00:00")
+         rc = Fail("Adding a day across a clock change moved the clock time");
    }
    if (rc == 0 && Date(2025, 7, 1, 12, 0, 0).Str("%Z") == "EDT")
    {
@@ -1009,7 +1084,7 @@ static int CheckErrorMessages()
       return Fail("Cron() with separate fields gave the wrong message");
    try
    {
-      start.Cron("* " + string(100000, '5'));
+      start.Cron("* " + string(60000, '5'));
    }
    catch (const invalid_argument& e)
    {
@@ -1017,6 +1092,131 @@ static int CheckErrorMessages()
    }
    if (said.size() > 200 || said.find("...") == string::npos)
       return Fail("A very long bad cron was not shortened in its message");
+   try
+   {
+      start.Cron(string(70000, '*'));
+   }
+   catch (const invalid_argument& e)
+   {
+      said = e.what();
+   }
+   if (said != "the cron is too long (70000 characters; at most 65536)")
+      return Fail(("A cron over 64 KiB gave the wrong message: " + said).c_str());
+   return 0;
+}
+
+// A timezone that reports a year too large to work with
+class HugeYearZone : public Date::TimeZone
+{
+   public:
+     bool ToLocal(time_t t, struct tm& tmOut) const
+     {
+        time_t base = 0;
+        if (gmtime_r(&base, &tmOut) == NULL)
+           return false;
+        tmOut.tm_year = (t > 0) ? INT_MAX : tmOut.tm_year;
+        return true;
+     }
+};
+
+// A timezone that reports a real date for any moment at all, even far
+// past what the system's own functions handle (as a custom tzinfo could)
+class AnyTimeZone : public Date::TimeZone
+{
+   public:
+     bool ToLocal(time_t t, struct tm& tmOut) const
+     {
+        time_t inRange = (time_t)(((unsigned long long)t) % 4000000000ULL);
+        return gmtime_r(&inRange, &tmOut) != NULL;
+     }
+};
+
+// Edge cases that used to be undefined behaviour (overflowing an int), and
+// small consistency fixes
+static int CheckEdges()
+{
+   // Searching right up to the largest time_t stops cleanly instead of
+   // stepping past it (run under UBSan to see no overflow)
+   const char *steps[] = {"5", "0 5", "0 0 5", "0 0 0 15", "0 0 0 1 6",
+                          "0 0 0 * * 3", "0 0 0 31 2,4"};
+   const time_t highest = numeric_limits<time_t>::max();
+   for (unsigned i = 0; i < sizeof(steps)/sizeof(steps[0]); i++)
+   {
+      for (time_t back = 1; back <= 4000; back *= 4)
+      {
+         try
+         {
+            time_t when = Date::CronAfter(highest - back, steps[i], false,
+                                          AnyTimeZone());
+            if (when <= highest - back)
+               return Fail("A search near the largest time_t went backwards");
+         }
+         catch (const runtime_error&)
+         {
+            // Nothing left before the end of time: fine
+         }
+      }
+   }
+
+   // A timezone reporting the largest year makes the search give up
+   // cleanly (run under UBSan to see no overflow)
+   bool refused = false;
+   try
+   {
+      Date::CronAfter(1, "0 0 0", false, HugeYearZone());
+   }
+   catch (const runtime_error&)
+   {
+      refused = true;
+   }
+   if (!refused)
+      return Fail("A timezone reporting year INT_MAX was not refused");
+
+   // A date assigned to itself stays the same
+   Date self(2025, 6, 15, 12, 30, 45);
+   Date& alias = self;
+   self = alias;
+   if (self.Str() != "2025-06-15 12:30:45")
+      return Fail("Assigning a date to itself changed it");
+
+   // The month after December of the largest year
+   Date top(INT_MAX, 12, 1, 0, 0, 0);
+   if (top.Year() != INT_MAX || top.MaxDOMsNextMonth() != 31 ||
+       top.MaxDOMsPrevMonth() != 30)
+      return Fail("Month lengths at the largest year are wrong");
+
+   // SetMonth() keeps to the end of the month, as AddMonth() does
+   Date jan(2025, 1, 31, 12, 0, 0);
+   Date leap(2024, 1, 31, 12, 0, 0);
+   if (!jan.SetMonth(2) || jan.Str() != "2025-02-28 12:00:00" ||
+       !leap.SetMonth(2) || leap.Str() != "2024-02-29 12:00:00")
+      return Fail("SetMonth() did not keep to the end of February");
+
+   // A day that never happens is refused straight away, even through a
+   // timezone hook (where a 400 year search would be slow)
+   clock_t started = clock();
+   bool never = false;
+   try
+   {
+      Date::CronAfter(1735689600, "0 0 0 31 2,4", false, FixedZone(0));
+   }
+   catch (const runtime_error&)
+   {
+      never = true;
+   }
+   if (!never || (clock() - started) * 1000 / CLOCKS_PER_SEC > 50)
+      return Fail("The 31st of February was not refused straight away");
+   // ...but with crontab's day OR weekday, the weekday still matches
+   if (!Expect("0 0 31 2 1", true, 2025, 3, 1, 0, 0, 0, "2026-02-02 00:00:00"))
+      return Fail("Feb 31st OR Monday (isc) should match a Monday");
+
+   // Formats too large to produce give an empty string, not a crash
+   string huge;
+   for (int i = 0; i < 30000; i++)
+      huge += "%Y";
+   if (!Date(2025, 1, 1).Str(huge).empty() ||
+       Date(2025, 1, 1).Str(string(40000, 'x')).size() != 40000)
+      return Fail("Str() with a huge format went wrong");
    return 0;
 }
 
@@ -1212,7 +1412,7 @@ int main()
    if (CheckExtras() || CheckLeapYears() || CheckDayMatching() ||
        CheckUnsetFields() || CheckSteps() || CheckHardening() ||
        CheckDriftLists() || CheckDaylightSaving() || CheckTimeZones() ||
-       CheckParser() || CheckErrorMessages())
+       CheckParser() || CheckErrorMessages() || CheckEdges())
       return 1;
    return 0;
 }

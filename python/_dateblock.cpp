@@ -25,6 +25,25 @@
 #include <stdexcept>
 #include "Date.h"
 
+// Turns seconds since the epoch (from Python) into a time_t.  NaN,
+// infinity and values a time_t can't hold set an OverflowError and return
+// false.  The largest time_t rounds up to 2**63 as a double, which itself
+// doesn't fit, hence '>='.
+static bool EpochToTime(double epoch, time_t &out)
+{
+   epoch = floor(epoch);
+   if (!isfinite(epoch) ||
+       epoch < (double) std::numeric_limits<time_t>::min() ||
+       epoch >= (double) std::numeric_limits<time_t>::max())
+   {
+      PyErr_SetString(PyExc_OverflowError,
+            "ref is outside of the supported time range.");
+      return false;
+   }
+   out = (time_t) epoch;
+   return true;
+}
+
 // Fills in 'out' from a naive Python reference value (timezone aware
 // ones go through CronInZone() instead):
 //  - None:               now
@@ -104,19 +123,12 @@ static bool PyToDate(PyObject *obj, Date &out)
 
    if (PyFloat_Check(obj))
    {
-      // NaN, infinity and huge values can't be turned into a time_t.  The
-      // largest time_t rounds up to 2**63 as a double, which itself
-      // doesn't fit, hence '>='.
-      double epoch = floor(PyFloat_AS_DOUBLE(obj));
-      if (!isfinite(epoch) ||
-          epoch < (double) std::numeric_limits<time_t>::min() ||
-          epoch >= (double) std::numeric_limits<time_t>::max())
+      time_t epoch;
+      if (!EpochToTime(PyFloat_AS_DOUBLE(obj), epoch))
       {
-         PyErr_SetString(PyExc_OverflowError,
-               "ref is outside of the supported time range.");
          return false;
       }
-      out.Set((time_t) epoch);
+      out.Set(epoch);
       return true;
    }
 
@@ -174,6 +186,17 @@ static PyObject *FromTimestamp(time_t t, PyObject *tzinfo)
    }
    PyObject *local = PyObject_CallMethod(utc, "astimezone", "O", tzinfo);
    Py_DECREF(utc);
+
+   // A tzinfo's own fromutc() decides what comes back, and Python doesn't
+   // check it; anything but a datetime can't be read as one
+   if (local != NULL && !PyDateTime_Check(local))
+   {
+      PyErr_Format(PyExc_TypeError,
+            "the tzinfo returned %.100s instead of a datetime",
+            Py_TYPE(local)->tp_name);
+      Py_DECREF(local);
+      return NULL;
+   }
    return local;
 }
 
@@ -250,6 +273,12 @@ static void SetCronError()
       if (!PyErr_Occurred())
          PyErr_SetString(PyExc_RuntimeError, e.what());
    }
+   catch (...)
+   {
+      if (!PyErr_Occurred())
+         PyErr_SetString(PyExc_RuntimeError,
+               "dateblock hit an unexpected error.");
+   }
 }
 
 // The next match for a naive reference (or none), read in the computer's
@@ -259,8 +288,8 @@ static PyObject *CronLocal(const char *cron, bool isc, PyObject *ref,
                            time_t &when)
 {
    // A C++ exception must never reach Python; it would abort the
-   // interpreter
-   Date dObjFinish;
+   // interpreter.  Even creating a Date can throw (if the current time
+   // can't be shown as a local date), so everything happens in here.
    try
    {
       Date dObjStart;
@@ -268,15 +297,15 @@ static PyObject *CronLocal(const char *cron, bool isc, PyObject *ref,
       {
          return NULL;
       }
-      dObjFinish = dObjStart.Cron(cron, isc);
+      Date dObjFinish(dObjStart.Cron(cron, isc));
+      when = dObjFinish.Time();
+      return DateToPy(dObjFinish);
    }
    catch (...)
    {
       SetCronError();
       return NULL;
    }
-   when = dObjFinish.Time();
-   return DateToPy(dObjFinish);
 }
 
 // The next match for a timezone aware datetime, read in its own timezone.
@@ -290,9 +319,11 @@ static PyObject *CronInZone(const char *cron, bool isc, PyObject *ref,
    {
       return NULL;
    }
-   double epoch = floor(PyFloat_AsDouble(ts));
+   // timestamp() can be anything a datetime subclass makes it return
+   double seconds = PyFloat_AsDouble(ts);
    Py_DECREF(ts);
-   if (PyErr_Occurred())
+   time_t epoch;
+   if (PyErr_Occurred() || !EpochToTime(seconds, epoch))
    {
       return NULL;
    }
@@ -300,7 +331,7 @@ static PyObject *CronInZone(const char *cron, bool isc, PyObject *ref,
    try
    {
       PyZone zone(tzinfo);
-      when = Date::CronAfter((time_t) epoch, cron, isc, zone);
+      when = Date::CronAfter(epoch, cron, isc, zone);
    }
    catch (...)
    {
@@ -489,10 +520,10 @@ PyMODINIT_FUNC PyInit__dateblock(void)
       return NULL;
    }
 
-   g_epoch = PyDateTimeAPI->DateTime_FromDateAndTime(
+   PyObject *epoch = PyDateTimeAPI->DateTime_FromDateAndTime(
          1970, 1, 1, 0, 0, 0, 0, PyDateTimeAPI->TimeZone_UTC,
          PyDateTimeAPI->DateTimeType);
-   if (g_epoch == NULL)
+   if (epoch == NULL)
    {
       return NULL;
    }
@@ -500,6 +531,7 @@ PyMODINIT_FUNC PyInit__dateblock(void)
    PyObject *m = PyModule_Create(&dateblockmodule);
    if (m == NULL)
    {
+      Py_DECREF(epoch);
       return NULL;
    }
 
@@ -521,8 +553,14 @@ PyMODINIT_FUNC PyInit__dateblock(void)
        PyModule_AddIntConstant(m, "DRIFT_MIN", Date::T_DRIFT_MIN) < 0 ||
        PyModule_AddIntConstant(m, "DRIFT_MAX", Date::T_DRIFT_MAX) < 0)
    {
+      Py_DECREF(epoch);
       Py_DECREF(m);
       return NULL;
    }
+
+   // Only kept once the module is ready (replacing any from an earlier
+   // import, so it isn't leaked)
+   Py_XDECREF(g_epoch);
+   g_epoch = epoch;
    return m;
 }

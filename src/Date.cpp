@@ -48,9 +48,21 @@
 
 using namespace std;
 
+// Times past 2038, and the 400 year search for the next match, need more
+// than 32 bits
+static_assert(sizeof(time_t) >= 8, "dateblock needs a 64-bit time_t");
+static_assert(numeric_limits<time_t>::is_signed,
+              "dateblock needs a signed time_t (for dates before 1970)");
+
+// The longest cron string (or single field) that is read; anything longer
+// is refused before it is looked at
+#ifndef CRON_MAX_LENGTH
+#define CRON_MAX_LENGTH 65536
+#endif
+
 namespace {
    // Number of days in a month (month is 0-11, year is the full year)
-   int DaysInMonth(int year, int month)
+   int DaysInMonth(long long year, int month)
    {
       static const int days[12] =
          {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
@@ -184,16 +196,26 @@ namespace {
    // second.
    void NowPrecise(struct timespec& ts)
    {
+      bool ok;
    #if defined(_WIN32)
-      timespec_get(&ts, TIME_UTC);
+      ok = (timespec_get(&ts, TIME_UTC) == TIME_UTC);
    #elif defined(__APPLE__)
       struct timeval tv;
-      gettimeofday(&tv, NULL);
-      ts.tv_sec = tv.tv_sec;
-      ts.tv_nsec = tv.tv_usec * 1000;
+      ok = (gettimeofday(&tv, NULL) == 0);
+      if (ok)
+      {
+         ts.tv_sec = tv.tv_sec;
+         ts.tv_nsec = tv.tv_usec * 1000;
+      }
    #else
-      clock_gettime(CLOCK_REALTIME, &ts);
+      ok = (clock_gettime(CLOCK_REALTIME, &ts) == 0);
    #endif
+      if (!ok)
+      {
+         // Should never happen; fall back to whole seconds
+         ts.tv_sec = time(NULL);
+         ts.tv_nsec = 0;
+      }
    }
 
    // The current time in whole seconds
@@ -289,10 +311,15 @@ namespace {
    // 'text' for an error message: shortened if it is very long, and with
    // control characters written as \xNN so they can't upset a terminal or
    // a log file
-   string Shown(const string& text)
+   //  - 'pos' and 'len' pick a part of 'text' (all of it by default),
+   //    without copying the rest.
+   string Shown(const string& text, size_t pos = 0,
+                size_t len = string::npos)
    {
+      size_t end = (len > text.size() - pos) ? text.size() : pos + len;
       string shown;
-      for (size_t i = 0; i < text.size() && shown.size() < 40; i++)
+      size_t i = pos;
+      for (; i < end && shown.size() < 40; i++)
       {
          unsigned char c = (unsigned char)text[i];
          if (c < 0x20 || c == 0x7f)
@@ -303,8 +330,7 @@ namespace {
          else
             shown += (char)c;
       }
-      return (shown.size() < text.size() && shown.size() >= 40) ?
-             shown + "..." : shown;
+      return (i < end) ? shown + "..." : shown;
    }
 
    // Reads the number starting at 'pos' (moving 'pos' past it), stopping
@@ -322,7 +348,7 @@ namespace {
          {
             while (pos < end && isdigit((unsigned char)str[pos]))
                pos++;
-            why = Shown(str.substr(start, pos - start)) + " is outside of " +
+            why = Shown(str, start, pos - start) + " is outside of " +
                   to_string(lo) + "-" + to_string(hi);
             return false;
          }
@@ -331,7 +357,7 @@ namespace {
       if (pos == start)
       {
          why = (pos < end) ?
-            "'" + Shown(str.substr(pos, end - pos)) + "' is not a number" :
+            "'" + Shown(str, pos, end - pos) + "' is not a number" :
             "a number is missing at the end";
          return false;
       }
@@ -402,6 +428,21 @@ namespace {
       return era * 146097 + doe - 719468;
    }
 
+   // The date (month is 1-12) that is 'days' after 1970-01-01; the
+   // reverse of DaysFromCivil()
+   void CivilFromDays(long long days, long long& year, int& month, int& day)
+   {
+      days += 719468;
+      long long era = (days >= 0 ? days : days - 146096) / 146097;
+      long long doe = days - era * 146097;
+      long long yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+      long long doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+      long long mp = (5 * doy + 2) / 153;
+      day = (int)(doy - (153 * mp + 2) / 5 + 1);
+      month = (int)(mp < 10 ? mp + 3 : mp - 9);
+      year = yoe + era * 400 + (month <= 2 ? 1 : 0);
+   }
+
    // The clock time in 'tm' counted in seconds as if it were UTC.  Fields
    // past their end roll over (month 12 is January of the next year, day
    // 32 is the 1st of the next month and so on).
@@ -427,12 +468,11 @@ namespace {
 
       struct tm tm;
       memset(&tm, 0, sizeof(tm));
-      if (!zone->ToLocal(t, tm) ||
+      if (!zone->ToLocal(t, tm) || tm.tm_year > INT_MAX - 1900 ||
           tm.tm_mon < 0 || tm.tm_mon > 11 || tm.tm_mday < 1 ||
-          tm.tm_mday > DaysInMonth(tm.tm_year + 1900, tm.tm_mon) ||
+          tm.tm_mday > DaysInMonth(tm.tm_year + 1900LL, tm.tm_mon) ||
           tm.tm_hour < 0 || tm.tm_hour > 23 || tm.tm_min < 0 ||
-          tm.tm_min > 59 || tm.tm_sec < 0 || tm.tm_sec > 60 ||
-          tm.tm_year > INT_MAX - 1900)
+          tm.tm_min > 59 || tm.tm_sec < 0 || tm.tm_sec > 60)
          return false;
 
       // 1970-01-01 was a Thursday (4)
@@ -478,10 +518,22 @@ namespace {
       return true;
    }
 
+   // Moves 't' forward by 'step' seconds.  Returns false (leaving 't' as it
+   // was) if that would go past 'limit', so 't' can never overflow.
+   bool Advance(time_t& t, time_t step, time_t limit)
+   {
+      if (step > limit - t)
+         return false;
+      t += step;
+      return true;
+   }
+
    // Moves 't' forward to a local date/time ('zone' NULL uses MakeTime()).
    // It always moves forward, even if the clock change around a daylight
-   // saving switch makes the result land a little early.
-   time_t JumpTo(const Date::TimeZone* zone, time_t t, struct tm target)
+   // saving switch makes the result land a little early.  Returns false if
+   // that would go past 'limit'.
+   bool JumpTo(const Date::TimeZone* zone, time_t& t, struct tm target,
+               time_t limit)
    {
       time_t next;
       struct tm made;
@@ -495,7 +547,12 @@ namespace {
       {
          next = t;
       }
-      return (next > t) ? next : t + 3600;
+      if (next <= t)
+         return Advance(t, 3600, limit);
+      if (next > limit)
+         return false;
+      t = next;
+      return true;
    }
 
    // The first moment after 'after' whose local time matches 's'.
@@ -522,7 +579,8 @@ namespace {
             next.tm_mon++;
             next.tm_mday = 1;
             next.tm_hour = next.tm_min = next.tm_sec = 0;
-            t = JumpTo(zone, t, next);
+            if (!JumpTo(zone, t, next, limit))
+               break;
             continue;
          }
 
@@ -531,7 +589,8 @@ namespace {
             struct tm next = tm;
             next.tm_mday++;
             next.tm_hour = next.tm_min = next.tm_sec = 0;
-            t = JumpTo(zone, t, next);
+            if (!JumpTo(zone, t, next, limit))
+               break;
             continue;
          }
 
@@ -544,29 +603,34 @@ namespace {
          {
             // One hour at a time; jumping further could step over a
             // matching hour when the clocks change
-            t += toHour;
+            if (!Advance(t, toHour, limit))
+               break;
             continue;
          }
 
          if (!Has(s.min, tm.tm_min))
          {
             int min = NextIn(s.min, tm.tm_min, 59);
-            t += (min < 0) ? toHour
-                           : toMinute + (min - tm.tm_min - 1) * 60;
+            if (!Advance(t, (min < 0) ? toHour
+                                      : toMinute + (min - tm.tm_min - 1) * 60,
+                         limit))
+               break;
             continue;
          }
 
          int sec = NextIn(s.sec, tm.tm_sec, 59);
          if (sec < 0)
          {
-            t += toMinute;
+            if (!Advance(t, toMinute, limit))
+               break;
             continue;
          }
          if (sec == tm.tm_sec)
          {
             return t;
          }
-         t += sec - tm.tm_sec;
+         if (!Advance(t, sec - tm.tm_sec, limit))
+            break;
       }
 
       throw runtime_error(
@@ -577,21 +641,24 @@ namespace {
    enum Field { F_SEC, F_MIN, F_HOUR, F_DOM, F_MONTH, F_DOW, F_DRIFT,
                 F_COUNT };
 
-   // The lowest and highest value of each field
-   int FieldLow(int field)
+   // Each field's lowest and highest value, and its name (for messages)
+   struct FieldInfo
    {
-      const int lows[F_COUNT] = {
-         Date::T_SEC_MIN, Date::T_MIN_MIN, Date::T_HOUR_MIN, Date::T_DOM_MIN,
-         Date::T_MONTH_MIN, Date::T_DOW_MIN, Date::T_DRIFT_MIN };
-      return lows[field];
-   }
+      int lo, hi;
+      const char *name;
+   };
 
-   int FieldHigh(int field)
+   const FieldInfo& Field(int field)
    {
-      const int highs[F_COUNT] = {
-         Date::T_SEC_MAX, Date::T_MIN_MAX, Date::T_HOUR_MAX, Date::T_DOM_MAX,
-         Date::T_MONTH_MAX, Date::T_DOW_MAX, Date::T_DRIFT_MAX };
-      return highs[field];
+      static const FieldInfo fields[F_COUNT] = {
+         {Date::T_SEC_MIN, Date::T_SEC_MAX, "second"},
+         {Date::T_MIN_MIN, Date::T_MIN_MAX, "minute"},
+         {Date::T_HOUR_MIN, Date::T_HOUR_MAX, "hour"},
+         {Date::T_DOM_MIN, Date::T_DOM_MAX, "day of month"},
+         {Date::T_MONTH_MIN, Date::T_MONTH_MAX, "month"},
+         {Date::T_DOW_MIN, Date::T_DOW_MAX, "day of week"},
+         {Date::T_DRIFT_MIN, Date::T_DRIFT_MAX, "drift"}};
+      return fields[field];
    }
 
    // What a cron string allows, once parsed
@@ -712,7 +779,7 @@ namespace {
             }
             if (pos != end)
             {
-               why = "'" + Shown(str.substr(pos, end - pos)) +
+               why = "'" + Shown(str, pos, end - pos) +
                      "' is not understood (each entry is *, x, x-y, x-y/z "
                      "or */x)";
                return false;
@@ -782,28 +849,30 @@ namespace {
       }
    };
 
-   // The name of each field, for error messages
-   const char *FieldName(int field)
-   {
-      const char *names[F_COUNT] = {
-         "second", "minute", "hour", "day of month", "month", "day of week",
-         "drift" };
-      return names[field];
-   }
-
    // Parses every field (seconds to drift).  Returns false (with 'why' set
    // to the field and what is wrong with it) if any of them is not
    // formatted correctly.  'stepFromLowest' is crontab's reading of '*/x'.
    bool ParseFields(const string fields[F_COUNT], bool stepFromLowest,
                     CronFields& out, string& why)
    {
+      for (int i = 0; i < F_COUNT; i++)
+      {
+         if (fields[i].size() > CRON_MAX_LENGTH)
+         {
+            why = string(Field(i).name) + ": it is too long (" +
+                  to_string(fields[i].size()) + " characters; at most " +
+                  to_string(CRON_MAX_LENGTH) + ")";
+            return false;
+         }
+      }
+
       for (int i = 0; i < F_DRIFT; i++)
       {
-         AddToMask add = { 0, FieldLow(i) };
-         if (!ReadField(fields[i], FieldLow(i), FieldHigh(i), stepFromLowest,
+         AddToMask add = { 0, Field(i).lo };
+         if (!ReadField(fields[i], Field(i).lo, Field(i).hi, stepFromLowest,
                         add, out.given[i], why))
          {
-            why = string(FieldName(i)) + " '" + Shown(fields[i]) + "': " + why;
+            why = string(Field(i).name) + " '" + Shown(fields[i]) + "': " + why;
             return false;
          }
          out.mask[i] = add.mask;
@@ -813,7 +882,7 @@ namespace {
       out.drifts.clear();
       AddToList add = { out.drifts };
       bool given;
-      if (!ReadField(fields[F_DRIFT], FieldLow(F_DRIFT), FieldHigh(F_DRIFT),
+      if (!ReadField(fields[F_DRIFT], Field(F_DRIFT).lo, Field(F_DRIFT).hi,
                      stepFromLowest, add, given, why))
       {
          why = "drift '" + Shown(fields[F_DRIFT]) + "': " + why;
@@ -858,6 +927,12 @@ namespace {
    //     *  *  *  *  *
    void ParseCron(const string& strIn, bool isISC, CronFields& out)
    {
+      if (strIn.size() > CRON_MAX_LENGTH)
+         throw invalid_argument("the cron is too long (" +
+                                to_string(strIn.size()) +
+                                " characters; at most " +
+                                to_string(CRON_MAX_LENGTH) + ")");
+
       vector<string> tokens;
       string why;
       if (!SplitCronString(strIn, isISC, tokens, why))
@@ -890,7 +965,7 @@ namespace {
    {
       uint64_t masks[F_DRIFT];
       for (int i = 0; i < F_DRIFT; i++)
-         masks[i] = f.given[i] ? f.mask[i] : AllOf(FieldLow(i), FieldHigh(i));
+         masks[i] = f.given[i] ? f.mask[i] : AllOf(Field(i).lo, Field(i).hi);
 
       Schedule s;
       if (f.isISC)
@@ -930,6 +1005,23 @@ namespace {
       s.dom = masks[F_DOM];
       s.month = masks[F_MONTH];
       s.dow = masks[F_DOW];
+
+      // A day that none of the allowed months has (ie: the 31st of
+      // February) never happens; say so straight away instead of
+      // searching 400 years for it.  (With crontab's day of month OR day of
+      // week, the weekday can still match, so this is skipped then.)
+      if (!s.domOrDow)
+      {
+         const int longest[12] = {31, 29, 31, 30, 31, 30, 31, 31, 30, 31,
+                                  30, 31};
+         uint64_t days = 0;
+         for (int month = 1; month <= 12; month++)
+            if (Has(s.month, month))
+               days |= AllOf(1, longest[month - 1]);
+         if ((s.dom & days) == 0)
+            throw runtime_error("No moment in time matches this cron (none "
+                                "in the next 400 years).");
+      }
 
       // A drift is added after the match.  Matching from 'now - drift' keeps
       // only the part of the drift that fits inside the schedule's interval,
@@ -1077,7 +1169,7 @@ Date::~Date()
 //------------------------------------------------
 const Date & Date::operator=(const Date& right)
 {
-   memcpy(&m_tmObj,&right.m_tmObj,sizeof(struct tm));
+   m_tmObj = right.m_tmObj;
    m_time = right.m_time;
    return (*this);
 }
@@ -1111,8 +1203,14 @@ const Date & Date::operator=(const struct tm &right)
 //------------------------------------------------
 void Date::Set()
 {
-   m_time=Now();
-   LocalTime(m_time, m_tmObj);
+   time_t now = Now();
+   struct tm tmNow;
+   if (!LocalTime(now, tmNow))
+   {
+      throw out_of_range("The current time can't be shown as a local date.");
+   }
+   m_time = now;
+   m_tmObj = tmNow;
 }
 
 //------------------------------------------------
@@ -1123,8 +1221,7 @@ void Date::Set()
 void Date::Set(int year, int mon, int day,
                int hour, int min, int sec)
 {
-   m_time=Now();
-   LocalTime(m_time, m_tmObj);
+   Set();
 
    // Other values out of range keep today's value for that field
    struct tm tmObj = m_tmObj;
@@ -1142,7 +1239,7 @@ void Date::Set(int year, int mon, int day,
    // A day out of range means the 1st; one past the end of the month
    // becomes the last day (ie: the 31st of April is the 30th)
    tmObj.tm_mday = (day >= T_DOM_MIN && day <= T_DOM_MAX) ? day : T_DOM_MIN;
-   int maxDays = DaysInMonth(tmObj.tm_year + 1900, tmObj.tm_mon);
+   int maxDays = DaysInMonth(tmObj.tm_year + 1900LL, tmObj.tm_mon);
    if (tmObj.tm_mday > maxDays)
       tmObj.tm_mday = maxDays;
 
@@ -1260,7 +1357,7 @@ bool Date::operator>=(const Date& right) const
 //------------------------------------------------
 int Date::MaxDOMsThisMonth() const
 {
-   return DaysInMonth(m_tmObj.tm_year + 1900, m_tmObj.tm_mon);
+   return DaysInMonth(m_tmObj.tm_year + 1900LL, m_tmObj.tm_mon);
 }
 
 //------------------------------------------------
@@ -1271,7 +1368,7 @@ int Date::MaxDOMsThisMonth() const
 int Date::MaxDOMsNextMonth() const
 {
    int month = m_tmObj.tm_mon + 1;
-   int year = m_tmObj.tm_year + 1900;
+   long long year = m_tmObj.tm_year + 1900LL;
    if (month > 11)
    {
       month = 0;
@@ -1288,7 +1385,7 @@ int Date::MaxDOMsNextMonth() const
 int Date::MaxDOMsPrevMonth() const
 {
    int month = m_tmObj.tm_mon - 1;
-   int year = m_tmObj.tm_year + 1900;
+   long long year = m_tmObj.tm_year + 1900LL;
    if (month < 0)
    {
       month = 11;
@@ -1367,17 +1464,23 @@ bool Date::AddHour(const int hours)
 //------------------------------------------------
 bool Date::AddDOM(const int days)
 {
-   // Aquire Time Now
-   struct tm tmTime;
-   time_t tTmp=m_time+(time_t)days*86400;
-   if (!LocalTime(tTmp, tmTime))
+   // Move the calendar date, not 24 hours at a time, so the clock time
+   // stays the same across daylight saving (12:00 plus a day is 12:00).
+   // The new date is worked out here, so mktime() is only ever handed a
+   // real date (some systems refuse a day of the month in the thousands).
+   long long year;
+   int month, day;
+   CivilFromDays(DaysFromCivil(m_tmObj.tm_year + 1900LL, m_tmObj.tm_mon + 1,
+                               m_tmObj.tm_mday) + days, year, month, day);
+   if (year - 1900 < INT_MIN || year - 1900 > INT_MAX - 1900)
    {
       return false;
    }
-
-   m_time=tTmp;
-   m_tmObj = tmTime;
-   return true;
+   struct tm tmTime = m_tmObj;
+   tmTime.tm_year = (int)(year - 1900);
+   tmTime.tm_mon = month - 1;
+   tmTime.tm_mday = day;
+   return MakeLocalTime(tmTime, m_tmObj, m_time);
 }
 
 //--------------------------------------------------
@@ -1413,7 +1516,7 @@ bool Date::AddMonth(const int months)
 
    // Past the end of the new month means its last day (Jan 31st plus a
    // month is Feb 28th or 29th)
-   int maxDays = DaysInMonth((int)(year + 1900), month);
+   int maxDays = DaysInMonth(year + 1900, month);
    tmTime.tm_mday = (tmpDays > maxDays) ? maxDays : tmpDays;
    return MakeLocalTime(tmTime, m_tmObj, m_time);
 }
@@ -1433,6 +1536,12 @@ bool Date::AddYear(const int years)
       return false;
    }
    tmTime.tm_year = (int)year;
+
+   // February 29th in a year that isn't a leap year is the 28th, as
+   // AddMonth() does
+   int maxDays = DaysInMonth(year + 1900, tmTime.tm_mon);
+   if (tmTime.tm_mday > maxDays)
+      tmTime.tm_mday = maxDays;
    return MakeLocalTime(tmTime, m_tmObj, m_time);
 }
 
@@ -1515,6 +1624,12 @@ bool Date::SetMonth(const int months)
    }
    struct tm tmTime = m_tmObj;
    tmTime.tm_mon = months - 1;
+
+   // Past the end of the new month means its last day (the 31st of
+   // January set to February is the 28th or 29th), as AddMonth() does
+   int maxDays = DaysInMonth(tmTime.tm_year + 1900LL, tmTime.tm_mon);
+   if (tmTime.tm_mday > maxDays)
+      tmTime.tm_mday = maxDays;
    return MakeLocalTime(tmTime, m_tmObj, m_time);
 }
 
@@ -1531,6 +1646,11 @@ bool Date::SetYear(const int years)
    }
    struct tm tmTime = m_tmObj;
    tmTime.tm_year = years - 1900;
+
+   // February 29th in a year that isn't a leap year is the 28th
+   int maxDays = DaysInMonth(years, tmTime.tm_mon);
+   if (tmTime.tm_mday > maxDays)
+      tmTime.tm_mday = maxDays;
    return MakeLocalTime(tmTime, m_tmObj, m_time);
 }
 
@@ -1550,16 +1670,19 @@ const string Date::Str(const string& strFormat) const
    // it until the result fits.  Give up (returning an empty string) for
    // formats that genuinely produce nothing or are absurdly large.
    vector<char> buf(256);
-   while (buf.size() <= 65536)
+   while (true)
    {
       size_t len = strftime(&buf[0], buf.size(), strFormat.c_str(), &m_tmObj);
       if (len > 0)
       {
          return string(&buf[0], len);
       }
+      if (buf.size() >= 65536)
+      {
+         return string();
+      }
       buf.resize(buf.size() * 2);
    }
-   return string();
 }
 
 //------------------------------------------------
@@ -1583,7 +1706,7 @@ const Date Date::Cron(int lSecOffset,
    CronFields f;
    for (int i = 0; i < F_DRIFT; i++)
    {
-      f.given[i] = (values[i] >= FieldLow(i) && values[i] <= FieldHigh(i));
+      f.given[i] = (values[i] >= Field(i).lo && values[i] <= Field(i).hi);
       f.mask[i] = f.given[i] ? (uint64_t)1 << values[i] : 0;
    }
    if (lDriftOffset >= T_DRIFT_MIN && lDriftOffset <= T_DRIFT_MAX)
@@ -1738,8 +1861,11 @@ unsigned long Date::BlockUntil(time_t until)
       return 0;
    }
 
-   double left = (double)(until - now.tv_sec) - now.tv_nsec / 1e9;
-   double chunk = (left > 1.0) ? 1.0 : left;
+   // A whole second while more than one is left, otherwise just what is
+   // left of the last one ('until - now' isn't worked out: with a clock
+   // set before 1970 and a far away 'until' it could overflow)
+   double chunk = (until - 1 > now.tv_sec) ? 1.0
+                                           : 1.0 - now.tv_nsec / 1e9;
 #ifdef _WIN32
    Sleep((DWORD)(chunk * 1000.0) + 1);
 #else

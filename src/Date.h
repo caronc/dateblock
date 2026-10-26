@@ -103,6 +103,14 @@ class Date
      void Set(const time_t &);
      void Set(const struct tm &);
 
+     // Add (or, when negative, take away) time:
+     //  - AddSec(), AddMin() and AddHour() count real elapsed time
+     //  - AddDOM(), AddMonth() and AddYear() move the calendar date and keep
+     //    the clock time, even across daylight saving (12:00 stays 12:00)
+     //  - past the end of the new month means its last day (Jan 31st plus a
+     //    month, or Feb 29th plus a year, lands on Feb 28th)
+     //  - T_YEAR_MIN and T_YEAR_MAX only limit what Set() and SetYear()
+     //    accept; adding can go before year 0 (year -1 is 2 BC)
      bool AddSec(const int seconds = 1);
      bool AddMin(const int minutes = 1);
      bool AddHour(const int hours = 1);
@@ -114,6 +122,9 @@ class Date
      bool SetMin(const int minutes = 0);
      bool SetHour(const int hours = 0);
      bool SetDOM(const int days = 1);
+     // Past the end of the new month means its last day (Jan 31st set to
+     // February is the 28th or 29th, Feb 29th set to 2025 is the 28th), as
+     // AddMonth() does
      bool SetMonth(const int months = 1);
      bool SetYear(const int years);
 
@@ -128,12 +139,12 @@ class Date
      int Hour() const; // returns 0-23
      int DOM() const; // returns 1-31
      int Month() const; // returns 1-12 Jan=1, Dec=12
-     int Year() const; // returns 1980 and +
-     int DOW() const; // returns 0-6
+     int Year() const; // returns the full year (ie: 2025)
+     int DOW() const; // returns 0-6 Sun=0, Sat=6
 
-     int MaxDOMsThisMonth() const; // returns 1-31
-     int MaxDOMsNextMonth() const; // returns 1-31
-     int MaxDOMsPrevMonth() const; // returns 1-31
+     int MaxDOMsThisMonth() const; // returns 28-31
+     int MaxDOMsNextMonth() const; // returns 28-31
+     int MaxDOMsPrevMonth() const; // returns 28-31
 
      // A more advanced cron that calculates cron syntax such as:
      // 0-4,6      (which would handle 0,1,2,3,4,6)
@@ -178,13 +189,16 @@ class Date
      //  that matches specified cron entry
      //  By default lSecoffset is always set to 0 if 'nothing'
      //    else was specified.
-     //  Throws std::runtime_error if no matching moment can be found
-     //  (for example the 31st of February).  All of the Cron() functions
-     //  below behave the same way.
+     //  Days a month doesn't have are simply skipped in that month: days
+     //  20-31 of February and March match Feb 20-28 (29 in a leap year)
+     //  and Mar 20-31.  Only when nothing at all can ever match (ie: only
+     //  the 30th and 31st of February) is std::runtime_error thrown.  All
+     //  of the Cron() functions below behave the same way.
      //  The Cron() functions that take strings also throw
      //  std::invalid_argument if the cron is not formatted correctly; its
      //  what() says which field is wrong and why (ie: "minute '99': 99 is
      //  outside of 0-59").  CronValid() checks one without an exception.
+     //  A cron (or a single field) longer than 64 KiB is always refused.
      const Date Cron(int lSecOffset   = T_NO_ENTRY,
                      int lMinOffset   = T_NO_ENTRY,
                      int lHourOffset  = T_NO_ENTRY,

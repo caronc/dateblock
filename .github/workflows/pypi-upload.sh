@@ -28,4 +28,8 @@ token=$(curl -sSf -X POST https://pypi.org/_/oidc/mint-token \
    -d "{\"token\":\"$oidc\"}" | json_value token)
 echo "::add-mask::$token"
 
-pipx run twine upload --skip-existing -u __token__ -p "$token" "$@"
+# The token goes in the environment, not on the command line (where other
+# processes could see it)
+TWINE_USERNAME=__token__ TWINE_PASSWORD="$token" \
+   pipx run "$(grep '^twine==' .github/release-tools/requirements.txt)" \
+   upload --skip-existing "$@"

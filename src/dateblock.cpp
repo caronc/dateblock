@@ -31,9 +31,31 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include "Date.h"
-#include "dateblock.h"
 
 using namespace std;
+
+#define AUTHOR "Chris Caron <lead2gold@gmail.com>"
+
+// 'text' for an error message: shortened if it is very long, and with
+// control characters written as \xNN so they can't upset a terminal or a
+// log file
+static string Shown(const string& text)
+{
+   string shown;
+   size_t i = 0;
+   for (; i < text.size() && shown.size() < 60; i++)
+   {
+      unsigned char c = (unsigned char)text[i];
+      if (c < 0x20 || c == 0x7f)
+      {
+         const char *hex = "0123456789abcdef";
+         shown += string("\\x") + hex[c >> 4] + hex[c & 0xf];
+      }
+      else
+         shown += (char)c;
+   }
+   return (i < text.size()) ? shown + "..." : shown;
+}
 
 // The options dateblock understands
 struct Option
@@ -126,27 +148,38 @@ static bool Store(CommandLine& out, const Option& opt, const string& value,
 // if there is no such option, or more than one
 static const Option *FindLong(const string& name, string& error)
 {
-   vector<const Option *> matches;
+   const Option *found = NULL;
+   size_t matches = 0;
    for (size_t i = 0; i < OPTION_COUNT; i++)
    {
       if (name == OPTIONS[i].longName)
          return &OPTIONS[i];
       if (!name.empty() &&
           string(OPTIONS[i].longName).compare(0, name.size(), name) == 0)
-         matches.push_back(&OPTIONS[i]);
+      {
+         found = &OPTIONS[i];
+         matches++;
+      }
    }
-   if (matches.size() == 1)
-      return matches[0];
+   if (matches == 1)
+      return found;
 
-   if (matches.empty())
+   if (matches == 0)
    {
-      error = "unrecognised option '--" + name + "'";
+      error = "unrecognised option '--" + Shown(name) + "'";
    }
    else
    {
-      error = "option '--" + name + "' is ambiguous (it could be";
-      for (size_t i = 0; i < matches.size(); i++)
-         error += string(i ? ", --" : " --") + matches[i]->longName;
+      error = "option '--" + Shown(name) + "' is ambiguous (it could be";
+      const char *separator = " --";
+      for (size_t i = 0; i < OPTION_COUNT; i++)
+      {
+         if (string(OPTIONS[i].longName).compare(0, name.size(), name) == 0)
+         {
+            error += string(separator) + OPTIONS[i].longName;
+            separator = ", --";
+         }
+      }
       error += ")";
    }
    return NULL;
@@ -227,7 +260,7 @@ static bool ParseCommandLine(int argc, char **argv, CommandLine& out,
                opt = &OPTIONS[o];
          if (opt == NULL)
          {
-            error = string("unrecognised option '-") + arg[c] + "'";
+            error = "unrecognised option '-" + Shown(string(1, arg[c])) + "'";
             return false;
          }
          if (!opt->takesValue)
@@ -260,7 +293,7 @@ static bool ParseCommandLine(int argc, char **argv, CommandLine& out,
 //  Function: ProgramDetails
 //
 //------------------------------------------------
-void ProgramDetails()
+static void ProgramDetails()
 {
    cerr << "Dateblock v" << PACKAGE_VERSION  << " "
         << "Copyright (C) 2013-2026 " << AUTHOR << endl << endl
@@ -280,7 +313,7 @@ void ProgramDetails()
         << "dateblock [options] [--] [command [arguments...]]" << endl << endl;
 }
 
-void ProgramExamples()
+static void ProgramExamples()
 {
    cerr << "A variety of syntax is accepted by this tool such as:" << endl
 
@@ -419,7 +452,7 @@ static int Run(int argc, char **argv)
    vector<char *>& command = cl.command;
 
    Date dObjStart;
-   Date dObjFinish;
+   Date dObjFinish(dObjStart);
 
    string sSecOffset="*";
    string sMinOffset="*";
@@ -459,7 +492,7 @@ static int Run(int argc, char **argv)
       string zone = cl.Get("timezone");
       if (!KnownTimeZone(zone))
       {
-         cerr << "Error: Unknown timezone '" << zone << "'" << endl;
+         cerr << "Error: Unknown timezone '" << Shown(zone) << "'" << endl;
          return 1;
       }
       setenv("TZ", zone.c_str(), 1);
@@ -538,7 +571,7 @@ static int Run(int argc, char **argv)
    }
    catch (const invalid_argument& e)
    {
-      cerr << "Error: Syntax Invalid : '" << sShown << "'" << endl
+      cerr << "Error: Syntax Invalid : '" << Shown(sShown) << "'" << endl
            << "       " << e.what() << endl
            << "Run 'dateblock --help' to see the syntax that is accepted."
            << endl;
@@ -597,11 +630,12 @@ static int Run(int argc, char **argv)
          int err = errno;
          if (err == ENOENT)
          {
-            cerr << "dateblock: " << command[0] << ": command not found"
+            cerr << "dateblock: " << Shown(command[0]) << ": command not found"
                  << endl;
             return 127;
          }
-         cerr << "dateblock: " << command[0] << ": " << strerror(err) << endl;
+         cerr << "dateblock: " << Shown(command[0]) << ": " << strerror(err)
+              << endl;
          return 126;
       }
    }

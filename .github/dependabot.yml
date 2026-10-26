@@ -1,0 +1,17 @@
+# Keeps the pinned build tools from going stale: once a month, Dependabot
+# opens a pull request for each one that has a new release (review it, then
+# merge or close it).
+#  - github-actions: the actions in .github/workflows, pinned to exact
+#    commits (it updates the commit and the '# vX' comment beside it)
+#  - pip: build, twine and cibuildwheel in .github/release-tools
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: pip
+    directory: /.github/release-tools
+    schedule:
+      interval: monthly

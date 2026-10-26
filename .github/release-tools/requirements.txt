@@ -1,0 +1,9 @@
+# The exact versions of the tools that build and publish dateblock for PyPI
+# (the GitHub workflow and 'make docker-pypi' both read them from here).
+# Dependabot opens a pull request when a new release of one comes out (see
+# .github/dependabot.yml); cibuildwheel's version here and the
+# pypa/cibuildwheel action pinned in .github/workflows/wheels.yml should
+# move together.
+build==1.6.1
+twine==7.0.0
+cibuildwheel==4.3.4

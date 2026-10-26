@@ -51,6 +51,8 @@ EXTRA_DIST = \
 	packaging/docker/Dockerfile.arch \
 	.github/workflows/wheels.yml \
 	.github/workflows/pypi-upload.sh \
+	.github/dependabot.yml \
+	.github/release-tools/requirements.txt \
 	pyproject.toml \
 	setup.py \
 	MANIFEST.in \
