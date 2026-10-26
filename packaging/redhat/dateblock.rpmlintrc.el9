@@ -1,0 +1,23 @@
+from Config import *
+
+# datetools is replaced, not provided: this is not a drop-in replacement
+# for it (its datemath tool was retired)
+addFilter('obsolete-not-provided datetools')
+
+# The development files and the Python bindings carry no documentation of
+# their own (the dateblock package has it)
+addFilter('dateblock-devel.*: W: no-documentation')
+addFilter('python.*-dateblock.*: W: no-documentation')
+
+# Ignore false-positive spelling errors on cron words and our own names
+addFilter('spelling-error.*cron')
+addFilter('spelling-error.*libdateblock')
+addFilter('spelling-error.*linkable')
+addFilter('dateblock-libs.*: W: no-documentation')
+
+# The Python 2 bindings are replaced, not provided
+addFilter('obsolete-not-provided python.*-dateblock')
+
+
+# EL9's rpmlint predates SPDX license names
+addFilter('invalid-license GPL-2.0-or-later')

@@ -292,7 +292,7 @@ If you found Apprise useful at all, [please consider sponsoring][sponsorship] or
 ## COPYRIGHT
 
 Copyright (C) 2013-2026 Chris Caron. License GPLv2+: GNU GPL version 2 or
-later (https://gnu.org/licenses/gpl.html).
+later (https://www.gnu.org/licenses/old-licenses/gpl-2.0.html).
 
 This is free software: you are free to change and redistribute it. There is
 NO WARRANTY, to the extent permitted by law.

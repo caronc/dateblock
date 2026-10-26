@@ -14,7 +14,6 @@
 
 # twine / pypi stuff
 *.egg-info/
-dist/
 
 # autotools
 Makefile
@@ -45,6 +44,8 @@ dateblock.pc
 *.trs
 
 # build outputs
+# (every 'make docker-*' and 'make release-*' target writes into dist/)
+dist/
 src/dateblock
 tests/unittest
 dateblock-*.tar.gz

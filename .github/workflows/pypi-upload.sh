@@ -9,8 +9,8 @@
 # See https://docs.pypi.org/trusted-publishers/
 set -euo pipefail
 
-# Only ever publish from a version tag that matches configure.ac
-version=$(sed -nE 's/^AC_INIT\(\[dateblock\], *\[([^]]+)\].*/\1/p' configure.ac)
+# Only ever publish from a version tag that matches __version__
+version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' python/dateblock/__init__.py)
 if [ "${GITHUB_REF_NAME:-}" != "v$version" ]; then
    echo "Not uploading: tag '${GITHUB_REF_NAME:-}' does not match v$version" >&2
    exit 1

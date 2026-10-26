@@ -12,15 +12,15 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License along with
-# this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+# this program; if not, see <https://www.gnu.org/licenses/>.
 #
 # Fedora 44 build environment for dateblock (see the docker-* targets in
 # GNUmakefile).  The build requirements come straight from the spec file,
 # so this image always matches what the RPM build needs.
 FROM registry.fedoraproject.org/fedora:44
 
-RUN dnf -y install dnf-plugins-core rpm-build rpmlint git tar gzip rubygem-ronn-ng && \
+RUN dnf -y install dnf-plugins-core rpm-build rpmlint glibc-langpack-en git tar \
+    gzip rubygem-ronn-ng && \
     dnf clean all
 
 COPY packaging/redhat/dateblock.spec /tmp/dateblock.spec

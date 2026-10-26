@@ -13,8 +13,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License along with
-# this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+# this program; if not, see <https://www.gnu.org/licenses/>.
 #
 # Runs inside a build container (see packaging/docker/Dockerfile.*).
 #  - The source tree is mounted read-only at /src; it is copied first so
@@ -87,7 +86,25 @@ rpm)
    make dist
    rpmbuild -ba --define "_topdir /tmp/rpmbuild" --define "_sourcedir $PWD" \
       packaging/redhat/dateblock.spec
-   cp /tmp/rpmbuild/RPMS/*/*.rpm /tmp/rpmbuild/SRPMS/*.rpm /out/
+   cp /tmp/rpmbuild/RPMS/*/*.rpm /tmp/rpmbuild/SRPMS/*.rpm \
+      dateblock-$version.tar.gz /out/
+
+   # Check the packages against the packaging guidelines (where rpmlint is
+   # available); dateblock.rpmlintrc.<dist> holds the expected warnings
+   if command -v rpmlint >/dev/null; then
+      rc=packaging/redhat/dateblock.rpmlintrc
+      dist=$(rpm --eval '%{?dist}' | sed 's/^\.//')
+      [ -f "$rc.$dist" ] && rc="$rc.$dist"
+      if rpmlint --help 2>&1 | grep -q -- --rpmlintrc; then
+         LC_ALL=C.UTF-8 rpmlint --rpmlintrc "$rc" \
+            packaging/redhat/dateblock.spec /tmp/rpmbuild/RPMS/*/*.rpm \
+            /tmp/rpmbuild/SRPMS/*.rpm
+      else
+         LC_ALL=C.UTF-8 rpmlint -f "$rc" \
+            packaging/redhat/dateblock.spec /tmp/rpmbuild/RPMS/*/*.rpm \
+            /tmp/rpmbuild/SRPMS/*.rpm
+      fi
+   fi
    ;;
 deb)
    # Debian builds from the release tarball plus a debian/ directory

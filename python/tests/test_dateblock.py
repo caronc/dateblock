@@ -13,8 +13,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License along with
-# this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+# this program; if not, see <https://www.gnu.org/licenses/>.
 """Tests for the dateblock Python module (run with: python3 -m unittest)."""
 import os
 import random
@@ -454,6 +453,13 @@ class DateblockTests(unittest.TestCase):
             db(5, block=False)
         with self.assertRaises(TypeError):
             db("*/1", ref="yesterday", block=False)
+
+    def test_package_details(self):
+        self.assertRegex(dateblock.__version__, r"^\d+\.\d+\.\d+$")
+        self.assertEqual(dateblock.__title__, "dateblock")
+        self.assertEqual(dateblock.__author__, "Chris Caron")
+        self.assertEqual(dateblock.__license__, "GPL-2.0-or-later")
+        self.assertIn("Chris Caron", dateblock.__copyright__)
 
     def test_constants(self):
         self.assertEqual(dateblock.SEC_MAX, 59)

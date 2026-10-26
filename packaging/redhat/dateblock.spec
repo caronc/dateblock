@@ -12,11 +12,10 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License along with
-# this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+# this program; if not, see <https://www.gnu.org/licenses/>.
 Name:           dateblock
 Version:        2.0.0
-Release:        1%{?dist}.nuxref
+Release:        1%{?dist}
 Summary:        Block (sleep) until a cron-style moment in time
 License:        GPL-2.0-or-later
 URL:            https://github.com/caronc/dateblock
@@ -28,25 +27,30 @@ BuildRequires:  autoconf
 BuildRequires:  automake
 BuildRequires:  libtool
 BuildRequires:  boost-devel
-BuildRequires:  python3-devel
+BuildRequires:  python%{python3_pkgversion}-devel
+# Fedora's python3-devel brings these in; EL9's and EL10's don't
 BuildRequires:  pyproject-rpm-macros
-BuildRequires:  python3-setuptools
-BuildRequires:  python3-pip
-%if 0%{?rhel}
-# Older setuptools releases need this to build wheels
-BuildRequires:  python3-wheel
+# Also generated below (%%pyproject_buildrequires), but listed here too so
+# that 'dnf builddep' can install them up front
+BuildRequires:  python3dist(setuptools) >= 53
+BuildRequires:  python3dist(wheel)
+%if 0%{?rhel} && 0%{?rhel} < 10
+# Python 3.9 needs this to read pyproject.toml
+BuildRequires:  python3dist(tomli)
 %endif
 
 Requires:       %{name}-libs%{?_isa} = %{version}-%{release}
 
-# This project used to be called datetools; that package only pulled in
-# dateblock (and the now retired datemath)
-Obsoletes:      datetools < 2.0.0
+# This project used to be called datetools.  That package also held
+# datemath, which was retired, so this is not a drop-in replacement for it
+# (no Provides); 1.0.3-1 was its last release.
+Obsoletes:      datetools < 1.0.3-2
 
 %description
 Dateblock works like sleep, except that instead of waiting for a number of
 seconds it waits until a crontab-style schedule is matched.  It also
-supports matching on seconds and adding an extra drift time.
+supports matching on seconds and adding an extra drift time, and can run a
+command once the time is reached.
 
 %package libs
 Summary:        Shared library for cron-style date calculations
@@ -64,18 +68,21 @@ Requires:       %{name}-libs%{?_isa} = %{version}-%{release}
 Header files, pkg-config file and the linkable library needed to build
 programs that use libdateblock.
 
-%package -n python3-dateblock
+%package -n python%{python3_pkgversion}-dateblock
 Summary:        Python bindings for dateblock (cron-style blocking)
 Requires:       %{name}-libs%{?_isa} = %{version}-%{release}
-# The old Python 2 bindings
-Obsoletes:      python-dateblock < 2.0.0
+# The old Python 2 bindings; 1.0.3-1 was their last release
+Obsoletes:      python-dateblock < 1.0.3-2
 
-%description -n python3-dateblock
+%description -n python%{python3_pkgversion}-dateblock
 Python bindings for dateblock; block until (or just work out) the next
 moment in time matching a cron-style schedule.
 
 %prep
 %autosetup -p1
+
+%generate_buildrequires
+%pyproject_buildrequires
 
 %build
 autoreconf --force --install
@@ -87,15 +94,18 @@ export DATEBLOCK_SHARED=1
 %pyproject_wheel
 
 %install
-export DATEBLOCK_SHARED=1
 %make_install
 find %{buildroot} -name '*.la' -delete
 %pyproject_install
+%pyproject_save_files -l dateblock
 
 %check
 export TZ=UTC
 make check
+
+# The Python bindings, against the library installed in the buildroot
 export LD_LIBRARY_PATH=%{buildroot}%{_libdir}
+%pyproject_check_import
 export PYTHONPATH=%{buildroot}%{python3_sitearch}
 %{python3} -m unittest discover -v -s python/tests
 
@@ -114,9 +124,7 @@ export PYTHONPATH=%{buildroot}%{python3_sitearch}
 %{_libdir}/libdateblock.so
 %{_libdir}/pkgconfig/dateblock.pc
 
-%files -n python3-dateblock
-%{python3_sitearch}/dateblock/
-%{python3_sitearch}/dateblock-%{version}.dist-info/
+%files -n python%{python3_pkgversion}-dateblock -f %{pyproject_files}
 
 %changelog
 * Sat Oct 24 2026 Chris Caron <lead2gold@gmail.com> - 2.0.0-1
@@ -124,7 +132,8 @@ export PYTHONPATH=%{buildroot}%{python3_sitearch}
 - Project renamed from datetools to dateblock; datemath has been retired
 - libdateblock is now a shared library (dateblock-libs and dateblock-devel)
 - Python 3 bindings (python3-dateblock)
-- Builds on EL9, EL10 and current Fedora
+- Builds on EL9, EL10 and current Fedora, following the current Fedora
+  packaging guidelines (pyproject macros)
 
 * Tue May  1 2018 Chris Caron <lead2gold@gmail.com> 1.0.3-1
 - Updated to version 1.0.3

@@ -12,8 +12,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License along with
-# this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+# this program; if not, see <https://www.gnu.org/licenses/>.
 """
 Block (sleep) until a cron-style moment in time.
 
@@ -24,7 +23,18 @@ Block (sleep) until a cron-style moment in time.
 
 Run ``help(dateblock)`` for all of the options.
 """
-from ._dateblock import (  # noqa: F401
+
+# The package details.
+__title__ = "dateblock"
+__description__ = "Block (sleep) until a cron-style moment in time"
+__version__ = "2.0.0"
+__author__ = "Chris Caron"
+__email__ = "lead2gold@gmail.com"
+__license__ = "GPL-2.0-or-later"
+__copyright__ = "Copyright (C) 2013-2026 Chris Caron <lead2gold@gmail.com>"
+__status__ = "Production"
+
+from ._dateblock import (  # noqa: E402,F401
     dateblock,
     SEC_MIN, SEC_MAX,
     MIN_MIN, MIN_MAX,
@@ -35,9 +45,3 @@ from ._dateblock import (  # noqa: F401
     DOW_MIN, DOW_MAX,
     DRIFT_MIN, DRIFT_MAX,
 )
-
-try:
-    from importlib.metadata import version as _version
-    __version__ = _version("dateblock")
-except Exception:  # pragma: no cover - not installed (ie: run from source)
-    __version__ = "unknown"

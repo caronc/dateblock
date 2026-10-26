@@ -13,8 +13,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License along with
-# this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+# this program; if not, see <https://www.gnu.org/licenses/>.
 #
 # Python packaging for dateblock (pip install dateblock).
 #
@@ -26,7 +25,9 @@
 #   point CPPFLAGS/LDFLAGS at an installed copy, ie:
 #     CPPFLAGS="$(pkg-config --cflags dateblock)"
 # - This is only the Python library; the dateblock command is the C++ tool.
-# - The version comes from configure.ac (AC_INIT).
+# - The version, author and other details come from the __version__,
+#   __author__ (and so on) lines in python/dateblock/__init__.py; it can't
+#   be imported here, since its C++ part isn't built yet.
 import os
 import re
 import sys
@@ -42,8 +43,12 @@ def read(name):
         return f.read()
 
 
-VERSION = re.search(
-    r"AC_INIT\(\[dateblock\],\s*\[([^]]+)\]", read("configure.ac")).group(1)
+def about(name):
+    """The value of __name__ = "..." in python/dateblock/__init__.py"""
+    return re.search(
+        r'^__%s__ = "([^"]*)"$' % name,
+        read(os.path.join("python", "dateblock", "__init__.py")),
+        re.M).group(1)
 
 if SHARED:
     extension = Extension(
@@ -64,8 +69,8 @@ else:
 
 setup(
     name="dateblock",
-    version=VERSION,
-    description="Block (sleep) until a cron-style moment in time",
+    version=about("version"),
+    description=about("description"),
     long_description=read("README.md"),
     long_description_content_type="text/markdown",
     url="https://github.com/caronc/dateblock",
@@ -75,9 +80,9 @@ setup(
         "Changelog":
             "https://github.com/caronc/dateblock/blob/master/ChangeLog",
     },
-    author="Chris Caron",
-    author_email="lead2gold@gmail.com",
-    license="GPL-2.0-or-later",
+    author=about("author"),
+    author_email=about("email"),
+    license=about("license"),
     python_requires=">=3.9",
     package_dir={"": "python"},
     packages=["dateblock"],

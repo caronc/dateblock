@@ -12,8 +12,7 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License along with
-# this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+# this program; if not, see <https://www.gnu.org/licenses/>.
 #
 
 # Shared library holding the date/cron logic (used by the dateblock tool and
@@ -34,7 +33,9 @@ dateblock_LDADD = libdateblock.la $(BOOST_PROGRAM_OPTIONS_LIBS)
 # isn't in its final folder yet, and ldconfig can't run there.  Keep those
 # quiet while installing, but not while compiling or linking (each target's
 # own flags below replace AM_LIBTOOLFLAGS for those steps).
-AM_LIBTOOLFLAGS = --no-warnings
+# ('--warnings none' rather than '--no-warnings': libtool 2.4.x, as in EL9
+# and EL10, ignores the latter)
+AM_LIBTOOLFLAGS = --warnings none
 libdateblock_la_LIBTOOLFLAGS =
 dateblock_LIBTOOLFLAGS =
 

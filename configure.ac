@@ -12,10 +12,13 @@
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License along with
-# this program; if not, write to the Free Software Foundation, Inc.,
-# 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+# this program; if not, see <https://www.gnu.org/licenses/>.
 AC_PREREQ([2.69])
-AC_INIT([dateblock], [2.0.0], [lead2gold@gmail.com], [dateblock],
+# The version comes from __version__ in python/dateblock/__init__.py, the
+# one place it is set
+AC_INIT([dateblock],
+        m4_esyscmd_s([sed -n 's/^__version__ = "\(.*\)"$/\1/p' python/dateblock/__init__.py]),
+        [lead2gold@gmail.com], [dateblock],
         [https://github.com/caronc/dateblock])
 
 AC_CONFIG_SRCDIR([src/Date.cpp])

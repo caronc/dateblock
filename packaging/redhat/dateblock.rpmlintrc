@@ -1,0 +1,15 @@
+from Config import *
+
+# datetools is replaced, not provided: this is not a drop-in replacement
+# for it (its datemath tool was retired)
+addFilter('obsolete-not-provided datetools')
+
+# The development files and the Python bindings carry no documentation of
+# their own (the dateblock package has it)
+addFilter('dateblock-devel.*: W: no-documentation')
+addFilter('python.*-dateblock.*: W: no-documentation')
+
+# Ignore false-positive spelling errors on cron words and our own names
+addFilter('spelling-error.*cron')
+addFilter('spelling-error.*libdateblock')
+addFilter('spelling-error.*linkable')

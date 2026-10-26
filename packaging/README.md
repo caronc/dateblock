@@ -109,26 +109,6 @@ Anyone on a platform without a wheel can still `pip install dateblock`; pip
 builds it from the source package instead, which needs a C++ compiler and
 the Python headers.
 
-Upload them with your own PyPI credentials:
-```bash
-uvx twine upload dist/pypi/*
-```
-
-## Making a Release
-```bash
-make release
-```
-This builds and tests everything (source tarball, every distribution package
-and the PyPI files) and gathers them into `dist/release/` with a
-`SHA256SUMS` file.
-
-Before tagging a new version, update it in all of these places:
-- `configure.ac` (`AC_INIT`); `setup.py` reads the version from here
-- `packaging/redhat/dateblock.spec` (`Version:` plus a `%changelog` entry)
-- `packaging/debian/changelog` (a new entry at the top)
-- `packaging/arch/PKGBUILD` (`pkgver`; then run `updpkgsums` once the release
-  is tagged)
-
 ## Man Page
 The man page is generated with [Ronn-NG](https://github.com/apjanke/ronn-ng).
 - Edit `man/dateblock.md`, following the
