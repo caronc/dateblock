@@ -50,6 +50,10 @@ src/dateblock
 tests/unittest
 dateblock-*.tar.gz
 
+# node.js (npm install builds the add-on in build/)
+node_modules/
+package-lock.json
+
 # python
 build/
 __pycache__/

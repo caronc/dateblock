@@ -1,6 +1,10 @@
 [![Paypal](https://img.shields.io/badge/paypal-donate-green.svg)](https://www.paypal.com/donate/?hosted_button_id=CR6YF7KLQWQ5E)
 [![PyPI](https://img.shields.io/pypi/v/dateblock.svg)](https://pypi.org/project/dateblock/)
 [![Python](https://img.shields.io/pypi/pyversions/dateblock.svg)](https://pypi.org/project/dateblock/)
+[![npm](https://img.shields.io/npm/v/@caronc/dateblock.svg)](https://www.npmjs.com/package/@caronc/dateblock)
+[![Node.js](https://img.shields.io/node/v/@caronc/dateblock.svg)](https://www.npmjs.com/package/@caronc/dateblock)
+[![Packagist](https://img.shields.io/packagist/v/caronc/dateblock.svg)](https://packagist.org/packages/caronc/dateblock)
+[![PHP](https://img.shields.io/packagist/dependency-v/caronc/dateblock/php.svg)](https://packagist.org/packages/caronc/dateblock)
 
 Dateblock
 =========
@@ -13,8 +17,8 @@ does not (refering to /etc/crontab style). Dateblock specifically offers the abi
 to wake/unblock on a _specific second_ and/or _drift_ for certain period afterwards
 your calculated time is met (kind of like combining _sleep_ and _ICS Cron_ into one).
 
-Python and PHP bindings are additionally included, supporting the standard
-date and time objects of each language!
+Python, PHP and Node.js bindings are additionally included, supporting the
+standard date and time objects of each language!
 
 ## Quick Start
 The `dateblock` command is a C++ tool; install it from the distribution
@@ -39,6 +43,12 @@ The PHP extension installs with [PIE](https://github.com/php/pie) (Linux and
 macOS with a 64-bit `time_t`, PHP 8.0 and newer):
 ```bash
 pie install caronc/dateblock
+```
+
+The Node.js package is on npm (Node.js 20 and newer, on a system with a
+64-bit `time_t`):
+```bash
+npm install @caronc/dateblock
 ```
 
 Packages for Fedora, RHEL/CentOS/Alma/Rocky 9 and 10, Debian and Arch Linux
@@ -346,6 +356,42 @@ A few things worth knowing:
 - Signal handlers set with `pcntl_signal()` run once it returns; Ctrl-C
   still ends the script straight away unless a handler is set for it.
 
+### DateBlock Node.js Bindings
+The Node.js package waits without blocking: `dateblock()` returns a promise,
+and the rest of your program keeps running in the meantime.
+```javascript
+import { dateblock, next } from '@caronc/dateblock';
+// or, in CommonJS: const { dateblock, next } = require('@caronc/dateblock');
+
+// When is the next 20 minute mark?  (a Date; nothing waits)
+const when = next('* /20');
+
+// Wait for it
+await dateblock('* /20');
+
+// Work it out from another moment (a Date, or milliseconds since the epoch)
+next('* /20', { ref: new Date(Date.now() - 4 * 86400000) });
+
+// A regular crontab entry: the start of each minute
+next('* * * * *', { isc: true });
+
+// Timezones: 9:00 in Tokyo, whatever timezone this computer is in
+await dateblock('0 0 9', { timeZone: 'Asia/Tokyo' });
+
+// Stop waiting early with an AbortSignal
+const controller = new AbortController();
+dateblock('0 0 9', { signal: controller.signal }).catch(() => {});
+controller.abort();
+```
+
+A few things worth knowing:
+- Without `timeZone`, the cron is read in the same timezone JavaScript's
+  `Date` uses.
+- An invalid cron string throws a `SyntaxError` saying what is wrong; a cron
+  that can never happen (such as February 31st), an unknown timezone or a
+  reference too far away throws a `RangeError`.
+- TypeScript types are included.
+
 ## Installation
 ### From PyPI (the Python library)
 ```bash
@@ -368,6 +414,20 @@ Like the rest of dateblock, it needs a 64-bit `time_t`: every 64-bit
 system has one, and so does current 32-bit ARM Linux. Older 32-bit systems
 can't hold dates past 2038, so the build stops there with an error (see
 [INSTALL.md](https://github.com/caronc/dateblock/blob/master/INSTALL.md)).
+
+### From npm (the Node.js package)
+```bash
+npm install @caronc/dateblock
+```
+npm compiles the C++ code while installing, so it needs a C++ compiler and
+Python (see [node-gyp](https://github.com/nodejs/node-gyp#installation)).
+npm 12 and newer only run that step once you allow it, so the first time:
+```bash
+npm install-scripts approve @caronc/dateblock
+npm rebuild @caronc/dateblock
+```
+It needs a 64-bit `time_t` too, so it won't build on older 32-bit systems
+(see [INSTALL.md](https://github.com/caronc/dateblock/blob/master/INSTALL.md)).
 
 ### From Source
 Assuming you have a C++ compiler and the standard development tools that

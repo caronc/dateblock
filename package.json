@@ -1,0 +1,48 @@
+{
+  "name": "@caronc/dateblock",
+  "version": "2.0.0",
+  "description": "Block (sleep) until a cron-style moment in time",
+  "keywords": ["cron", "crontab", "sleep", "schedule", "date", "time", "timezone"],
+  "homepage": "https://github.com/caronc/dateblock",
+  "bugs": "https://github.com/caronc/dateblock/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caronc/dateblock.git"
+  },
+  "license": "GPL-2.0-or-later",
+  "author": "Chris Caron <lead2gold@gmail.com>",
+  "funding": [
+    "https://github.com/sponsors/caronc",
+    "https://www.paypal.com/donate/?hosted_button_id=CR6YF7KLQWQ5E"
+  ],
+  "main": "node/index.js",
+  "types": "node/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./node/index.d.ts",
+      "import": "./node/index.mjs",
+      "require": "./node/index.js"
+    }
+  },
+  "files": [
+    "binding.gyp",
+    "node/dateblock.cpp",
+    "node/index.js",
+    "node/index.mjs",
+    "node/index.d.ts",
+    "src/Date.cpp",
+    "src/Date.h",
+    "COPYING"
+  ],
+  "gypfile": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "install": "node-gyp rebuild",
+    "test": "node --test node/test/*.test.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

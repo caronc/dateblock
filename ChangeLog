@@ -7,6 +7,9 @@ All notable changes to this project will be documented in this file.
   returns a `DateTimeImmutable`, reading the cron in the timezone of `$ref`.
   Install with `pie install caronc/dateblock` or the `php-dateblock`
   package.
+- Node.js bindings (Node.js 20 and newer): `await dateblock('0 0 9',
+  { timeZone: 'Asia/Tokyo' })` waits without blocking, and `next()` only
+  works the time out.  Install with `npm install @caronc/dateblock`.
 
 ## [2.0.0] - 2026-10-26
 The project is now called **dateblock** (it used to be datetools).

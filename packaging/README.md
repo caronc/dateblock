@@ -14,6 +14,9 @@ The Python package (PyPI) is built from `pyproject.toml` and `setup.py` at
 the top of the source tree; see [PyPI](#pypi-pip-install-dateblock) below.
 The PHP extension lives in `php/` and is described by `composer.json` at the
 top of the source tree; see [PIE](#pie-pie-install-caroncdateblock) below.
+The Node.js package lives in `node/` and is described by `package.json` and
+`binding.gyp` at the top of the source tree; see
+[npm](#npm-npm-install-caroncdateblock) below.
 
 Each `Dockerfile.<distro>` installs its build requirements straight from the
 matching packaging file (the spec's `BuildRequires`, `debian/control` or the
@@ -132,6 +135,39 @@ PIE needs a C++ compiler and the PHP development files on the computer it
 runs on, and a 64-bit `time_t` (older 32-bit systems are refused, as
 everywhere else; see `INSTALL.md`).  Windows isn't supported (PIE needs
 ready-built Windows files for that).
+
+## npm (npm install @caronc/dateblock)
+The npm package holds the source: `binding.gyp`, `node/` and the engine
+(`src/Date.cpp`).  npm compiles it with node-gyp when it is installed, so
+there are no ready-built files to make.  Build, test and pack it the same
+way with:
+```bash
+make docker-npm
+```
+Like everywhere else, it needs a 64-bit `time_t`; older 32-bit systems
+(including 32-bit Linux builds of Node.js) are refused (see `INSTALL.md`).
+This runs in the official Node.js image and writes the package file to
+`dist/npm/`.  The package's README is `node/README.md` (written for npm users;
+npm shows it on the package page), not the project's own README.
+
+The GitHub workflow (`.github/workflows/npm.yml`) tests it on Linux, macOS
+and Windows, and publishes it to npm when a version tag is pushed, using
+trusted publishing (no token is stored).  npm only allows that for a package
+that already exists, so the very first version is published by hand:
+```bash
+make docker-npm
+npm login
+npm publish dist/npm/caronc-dateblock-<version>.tgz
+```
+Then, on npmjs.com, add a trusted publisher to the package's settings:
+GitHub Actions, repository `caronc/dateblock`, workflow `npm.yml`.  Under
+"Allowed actions", also allow publishing with `npm publish` (only staged
+publishing is allowed otherwise, and the workflow's publish would be
+refused).
+
+npm 12 and newer don't run a package's install script until it is
+approved; the package says how (`npm install-scripts approve
+@caronc/dateblock`) if it finds it wasn't built.
 
 ## Man Page
 The man page is generated with [Ronn-NG](https://github.com/apjanke/ronn-ng).

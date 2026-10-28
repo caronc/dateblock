@@ -53,6 +53,7 @@ EXTRA_DIST = \
 	.github/workflows/wheels.yml \
 	.github/workflows/pypi-upload.sh \
 	.github/workflows/php.yml \
+	.github/workflows/npm.yml \
 	.github/dependabot.yml \
 	.github/release-tools/requirements.txt \
 	pyproject.toml \
@@ -62,6 +63,14 @@ EXTRA_DIST = \
 	python/dateblock/__init__.py \
 	python/tests/test_dateblock.py \
 	composer.json \
+	package.json \
+	binding.gyp \
+	node/dateblock.cpp \
+	node/README.md \
+	node/index.js \
+	node/index.mjs \
+	node/index.d.ts \
+	node/test/dateblock.test.js \
 	php/config.m4 \
 	php/dateblock.cpp \
 	php/dateblock_engine.cpp \

@@ -1,0 +1,89 @@
+# Builds and tests the npm package (@caronc/dateblock) on Linux, macOS and
+# Windows.
+#  - Every push and pull request: build and test only; nothing is kept
+#    (no artifacts are saved).
+#  - Pushing a version tag (ie: v2.1.0): once every test has passed, the
+#    publish job uploads the package to npm using trusted publishing (no
+#    token is stored; see packaging/README.md).  The package holds the
+#    source, and npm compiles it when it is installed, so there is nothing
+#    to build first.
+name: npm
+
+on:
+  push:
+    branches: [master]
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The actions are pinned to exact commits (a tag such as @v7 can be moved);
+# Dependabot (.github/dependabot.yml) opens a pull request when they have
+# a new release.
+jobs:
+  test:
+    name: Node ${{ matrix.node }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        node: ['20', '22', '24']
+        include:
+          - os: ubuntu-24.04-arm
+            node: '24'
+          - os: macos-latest
+            node: '24'
+          - os: windows-latest
+            node: '24'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+
+      # Compiles the add-on, as installing the package does
+      - name: Build
+        run: npm install --foreground-scripts --no-audit --no-fund
+
+      - name: Test
+        run: npm test
+
+  # Version tags only, and only once every test above has passed
+  publish:
+    name: Publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test]
+    runs-on: ubuntu-latest
+    # Lets this job prove to npm that it comes from this repository
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+          # Never restore a cache into the job that publishes
+          package-manager-cache: false
+
+      - name: Check the tag matches the version
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          init=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' python/dateblock/__init__.py)
+          if [ "$GITHUB_REF_NAME" != "v$version" ] || [ "$version" != "$init" ]; then
+            echo "Not publishing: tag $GITHUB_REF_NAME, package.json $version, __version__ $init" >&2
+            exit 1
+          fi
+
+      # npm shows the package's README.md; use the one written for npm users
+      - name: Publish
+        run: |
+          cp node/README.md README.md
+          npm publish

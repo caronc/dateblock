@@ -27,6 +27,7 @@
 #   make docker-man               regenerate packaging/man/dateblock.1
 #   make docker-shell             open a shell in the build container
 #   make docker-pypi              build the PyPI source package and wheels
+#   make docker-npm               build, test and pack the npm package
 #   make release-assets VERSION=x.y.z
 #                                 build every file for a release (see below)
 #   make release-recipes VERSION=x.y.z
@@ -165,14 +166,32 @@ docker-pypi:
 	$(PYRUN) twine==$(TWINE_VERSION) check --strict $(PYPI_OUT)/*
 	@echo "PyPI files written to $(PYPI_OUT)/"
 
+# npm: builds and tests the Node.js package in the official Node.js image
+# (NODE_IMAGE), the way 'npm install' builds it for users, and writes the
+# package file to dist/npm/.  The package is published by the GitHub
+# workflow (.github/workflows/npm.yml) when a version tag is pushed.
+NODE_IMAGE ?= docker.io/library/node:24
+NPM_OUT = $(CURDIR)/dist/npm
+
+docker-npm:
+	@test -n "$(CONTAINER)" || \
+	   { echo "Neither docker nor podman was found."; exit 1; }
+	rm -rf $(NPM_OUT)
+	mkdir -p $(NPM_OUT)
+	$(CONTAINER) run --rm $(DOCKER_USER) -e HOME=/tmp \
+	   -v $(CURDIR):/src:ro,z -v $(NPM_OUT):/out:z \
+	   $(NODE_IMAGE) /src/packaging/docker/build.sh npm
+	@echo "npm package written to dist/npm/"
+
 # The files for a GitHub release, in dist/release-<version>/, plus the
 # release notes (that version's ChangeLog section) beside it:
 #   - the source tarball (made by 'make dist', so it includes ./configure)
 #   - SHA256SUMS, its checksum (sha256sum -c SHA256SUMS)
-# Before gathering them, every RPM, Debian and Arch Linux package is built
-# and tested, as proof that the release builds everywhere; the packages
-# themselves are published through their own channels (EPEL, the AUR,
-# Homebrew), not attached.  The wheels are left to the GitHub workflow,
+# Before gathering them, the npm package and every RPM, Debian and Arch
+# Linux package (with its Python and PHP bindings) is built and tested, as
+# proof that the release builds everywhere; any failure stops the release.
+# The packages themselves are published through their own channels (EPEL,
+# the AUR, Homebrew, npm), not attached.  The wheels are left to the GitHub workflow,
 # which builds and tests them on every platform and publishes them to PyPI.
 # RELEASE_ARCHS="native aarch64" also builds the packages for 64-bit ARM
 # (under emulation, so it takes much longer).
@@ -182,6 +201,7 @@ docker-pypi:
 # Each build image is removed as soon as its packages are done, to save
 # disk space.  Run 'make release-clean' once you have the files.
 VERSION_IN_CODE = $(shell sed -n 's/^__version__ = "\(.*\)"$$/\1/p' python/dateblock/__init__.py)
+VERSION_IN_NPM = $(shell sed -n 's/^  "version": "\(.*\)",$$/\1/p' package.json)
 RELEASE_DIR = dist/release-$(VERSION)
 RELEASE_NOTES = dist/release-$(VERSION)-notes.md
 RELEASE_ARCHS ?= native
@@ -191,6 +211,8 @@ release-check:
 	   { echo "Usage: make release-assets VERSION=x.y.z"; exit 1; }
 	@test "$(VERSION)" = "$(VERSION_IN_CODE)" || \
 	   { echo "VERSION=$(VERSION) does not match __version__ ($(VERSION_IN_CODE))"; exit 1; }
+	@test "$(VERSION)" = "$(VERSION_IN_NPM)" || \
+	   { echo "VERSION=$(VERSION) does not match package.json ($(VERSION_IN_NPM))"; exit 1; }
 	@test "$(UNTAGGED)" = 1 || \
 	   { test -z "$$(git status --porcelain)" && \
 	     test "$$(git describe --exact-match --tags HEAD 2>/dev/null)" = "v$(VERSION)"; } || \
@@ -201,6 +223,11 @@ release-assets: release-check
 	@# Start from empty build folders, so only this run's files are gathered
 	rm -rf $(RELEASE_DIR) $(RELEASE_NOTES) \
 	   $(foreach d,$(DOCKER_DISTROS),dist/$(d) dist/$(d)-*)
+	@# The npm package first (it's the quickest); the Node.js image is
+	@# removed afterwards unless it was already here
+	@had=$$($(CONTAINER) images -q $(NODE_IMAGE)); \
+	   $(MAKE) --no-print-directory docker-npm || exit 1; \
+	   [ -n "$$had" ] || $(CONTAINER) rmi $(NODE_IMAGE) >/dev/null
 	@for arch in $(RELEASE_ARCHS); do \
 	   distros="$(DOCKER_DISTROS)"; \
 	   [ $$arch = native ] || distros="$(DOCKER_ARM_DISTROS)"; \
@@ -242,7 +269,7 @@ clean: clean-tree
 
 clean-tree:
 	rm -rf dist build wheelhouse *.egg-info python/*.egg-info \
-	   dateblock-*.tar.gz
+	   dateblock-*.tar.gz node_modules package-lock.json
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
 
 # Removes one build image (and the build cache) to free disk space
@@ -267,5 +294,5 @@ release-clean:
 
 .PHONY: docker-image docker-build docker-rpm docker-rpm-all docker-deb \
         docker-arch docker-all docker-package docker-man docker-shell \
-        docker-pypi docker-forget release-check release-assets \
+        docker-pypi docker-npm docker-forget release-check release-assets \
         release-recipes release-clean clean clean-tree

@@ -25,6 +25,7 @@
 #        build.sh deb     build the .debs    (Debian image)
 #        build.sh arch    build the packages (Arch image)
 #        build.sh man     regenerate the man page from its ronn source
+#        build.sh npm     build, test and pack the npm package (Node image)
 set -e
 mode=${1:-build}
 export LANG=C.UTF-8
@@ -41,6 +42,17 @@ else
    cp -a /src/. /tmp/src/
 fi
 cd /tmp/src
+
+if [ "$mode" = npm ]; then
+   # npm compiles the add-on while installing, as it does for users
+   npm install --foreground-scripts --no-audit --no-fund
+   TZ=UTC npm test
+   TZ=America/New_York npm test
+   # npm shows the package's README.md; use the one written for npm users
+   cp node/README.md README.md
+   npm pack --pack-destination /out
+   exit 0
+fi
 
 if [ "$mode" = man ]; then
    ronn --roff --pipe --manual="Dateblock Manual" --organization=Dateblock \
@@ -148,7 +160,7 @@ arch)
    cp *.pkg.tar.* /out/
    ;;
 *)
-   echo "Unknown mode: $mode (expected build, rpm, deb, arch or man)" >&2
+   echo "Unknown mode: $mode (expected build, rpm, deb, arch, man or npm)" >&2
    exit 2
    ;;
 esac
