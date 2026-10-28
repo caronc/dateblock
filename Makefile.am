@@ -40,6 +40,7 @@ EXTRA_DIST = \
 	packaging/debian/libdateblock1.lintian-overrides \
 	packaging/debian/libdateblock-dev.lintian-overrides \
 	packaging/debian/python3-dateblock.lintian-overrides \
+	packaging/debian/php-dateblock.lintian-overrides \
 	packaging/arch/PKGBUILD \
 	packaging/docker/build.sh \
 	packaging/docker/recipes.sh \
@@ -51,6 +52,7 @@ EXTRA_DIST = \
 	packaging/docker/Dockerfile.arch \
 	.github/workflows/wheels.yml \
 	.github/workflows/pypi-upload.sh \
+	.github/workflows/php.yml \
 	.github/dependabot.yml \
 	.github/release-tools/requirements.txt \
 	pyproject.toml \
@@ -58,4 +60,18 @@ EXTRA_DIST = \
 	MANIFEST.in \
 	python/_dateblock.cpp \
 	python/dateblock/__init__.py \
-	python/tests/test_dateblock.py
+	python/tests/test_dateblock.py \
+	composer.json \
+	php/config.m4 \
+	php/dateblock.cpp \
+	php/dateblock_engine.cpp \
+	php/dateblock_arginfo.h \
+	php/dateblock.stub.php \
+	php/dateblock.ini \
+	php/.gitignore \
+	php/tests/001-basic.phpt \
+	php/tests/002-timezones.phpt \
+	php/tests/003-errors.phpt \
+	php/tests/004-block.phpt \
+	php/tests/005-signature.phpt \
+	packaging/debian/php-dateblock.php

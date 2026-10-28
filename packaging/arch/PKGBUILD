@@ -1,10 +1,11 @@
 # Maintainer: Chris Caron <lead2gold@gmail.com>
 #
-# Builds two packages:
+# Builds three packages:
 #  - dateblock:        the tool, the libdateblock shared library and headers
 #  - python-dateblock: the Python bindings
+#  - php-dateblock:    the PHP extension
 pkgbase=dateblock
-pkgname=('dateblock' 'python-dateblock')
+pkgname=('dateblock' 'python-dateblock' 'php-dateblock')
 pkgver=2.0.0
 pkgrel=1
 pkgdesc='Block (sleep) until a cron-style moment in time'
@@ -12,7 +13,7 @@ arch=('x86_64' 'aarch64')
 url='https://github.com/caronc/dateblock'
 license=('GPL-2.0-or-later')
 makedepends=('python' 'python-setuptools' 'python-build'
-             'python-installer' 'python-wheel')
+             'python-installer' 'python-wheel' 'php')
 source=("$pkgbase-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
 # Replace with the real checksum ('updpkgsums') once v$pkgver is tagged
 sha256sums=('SKIP')
@@ -25,6 +26,12 @@ build() {
 
   # The Python bindings link against the libdateblock that was just built
   DATEBLOCK_SHARED=1 python -m build --wheel --no-isolation
+
+  # So does the PHP extension
+  cd php
+  phpize
+  ./configure --with-libdateblock LDFLAGS="$LDFLAGS -Wl,-L$PWD/../src/.libs"
+  make
 }
 
 check() {
@@ -36,6 +43,10 @@ check() {
   TZ=UTC LD_LIBRARY_PATH="$PWD/src/.libs" \
     PYTHONPATH="$(echo "$pylib"/usr/lib/python3*/site-packages)" \
     python -m unittest discover -v -s python/tests
+
+  cd php
+  TZ=UTC LD_LIBRARY_PATH="$PWD/../src/.libs" NO_INTERACTION=1 \
+    TEST_PHP_ARGS="-q --show-diff" make test
 }
 
 package_dateblock() {
@@ -50,4 +61,17 @@ package_python-dateblock() {
   depends=("dateblock=$pkgver" 'python')
   cd "$pkgbase-$pkgver"
   python -m installer --destdir="$pkgdir" dist/*.whl
+}
+
+package_php-dateblock() {
+  pkgdesc='PHP extension for dateblock (cron-style blocking)'
+  depends=("dateblock=$pkgver" 'php')
+  backup=('etc/php/conf.d/dateblock.ini')
+  cd "$pkgbase-$pkgver/php"
+  make INSTALL_ROOT="$pkgdir" install
+
+  # Arch leaves extensions turned off until the line is uncommented
+  install -d "$pkgdir/etc/php/conf.d"
+  sed 's/^extension=/;extension=/' dateblock.ini \
+    > "$pkgdir/etc/php/conf.d/dateblock.ini"
 }

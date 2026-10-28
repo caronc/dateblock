@@ -13,8 +13,8 @@ does not (refering to /etc/crontab style). Dateblock specifically offers the abi
 to wake/unblock on a _specific second_ and/or _drift_ for certain period afterwards
 your calculated time is met (kind of like combining _sleep_ and _ICS Cron_ into one).
 
-Python bindings are additionally included supporting all of the standard datetime
-formats and objects!
+Python and PHP bindings are additionally included, supporting the standard
+date and time objects of each language!
 
 ## Quick Start
 The `dateblock` command is a C++ tool; install it from the distribution
@@ -33,6 +33,12 @@ dateblock -n /15 -- ./backup.sh --full
 The Python library is on PyPI (Linux, macOS and Windows):
 ```bash
 pip install dateblock
+```
+
+The PHP extension installs with [PIE](https://github.com/php/pie) (Linux and
+macOS with a 64-bit `time_t`, PHP 8.0 and newer):
+```bash
+pie install caronc/dateblock
 ```
 
 Packages for Fedora, RHEL/CentOS/Alma/Rocky 9 and 10, Debian and Arch Linux
@@ -306,6 +312,40 @@ A few things worth knowing:
 - While blocking, other Python threads keep running and Ctrl-C
   (`KeyboardInterrupt`) works as expected.
 
+### DateBlock PHP Bindings
+The PHP extension adds a single `dateblock()` function that works the same
+way:
+```php
+<?php
+// Returns the moment it will unblock at (a DateTimeImmutable)
+$result = dateblock('* /20', block: false);
+echo 'Blocking until ', $result->format('Y-m-d H:i:s'), "\n";
+dateblock('* /20');
+
+// Work it out from another moment (a DateTime, DateTimeImmutable or
+// seconds since the epoch)
+$result = dateblock('* /20', false, new DateTimeImmutable('-4 days'));
+$result = dateblock('/5', false, 13424236);
+
+// A regular crontab entry: the start of each minute
+$result = dateblock('* * * * *', isc: true);
+
+// Timezones: the cron is read in the timezone of the reference, and the
+// result comes back in that same timezone.  This waits for 9:00 in Tokyo.
+$tokyo = new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo'));
+$result = dateblock('0 0 9', ref: $tokyo);
+```
+
+A few things worth knowing:
+- Without a `DateTime`/`DateTimeImmutable` reference, the cron is read in
+  PHP's default timezone (`date.timezone`, see
+  `date_default_timezone_get()`), not the computer's.
+- An invalid cron string throws a `ValueError` saying what is wrong; a cron
+  that can never happen (such as February 31st) throws a
+  `RuntimeException`.
+- Signal handlers set with `pcntl_signal()` run once it returns; Ctrl-C
+  still ends the script straight away unless a handler is set for it.
+
 ## Installation
 ### From PyPI (the Python library)
 ```bash
@@ -315,6 +355,19 @@ This gives you the Python library on Linux, macOS and Windows (the C++ code
 is compiled straight into it, so nothing else is needed). The `dateblock`
 command is the C++ tool; install it from the packages or build it from
 source as shown below.
+
+### With PIE (the PHP extension)
+```bash
+pie install caronc/dateblock
+```
+PIE builds the extension on your computer (the C++ code is compiled straight
+into it), so it needs a C++ compiler and the PHP development files (ie:
+`php-devel` or `php-dev`), and then turns it on (or tells you how).
+
+Like the rest of dateblock, it needs a 64-bit `time_t`: every 64-bit
+system has one, and so does current 32-bit ARM Linux. Older 32-bit systems
+can't hold dates past 2038, so the build stops there with an error (see
+[INSTALL.md](https://github.com/caronc/dateblock/blob/master/INSTALL.md)).
 
 ### From Source
 Assuming you have a C++ compiler and the standard development tools that
@@ -340,6 +393,20 @@ straight into the Python module):
 ```bash
 pip install .
 ```
+
+To build the PHP extension from your checkout (it needs the PHP development
+files; the C++ code is compiled straight into it unless you add
+`--with-libdateblock` to use the installed library instead):
+```bash
+cd php
+phpize
+./configure
+make
+make test
+sudo make install
+```
+Then turn it on by adding `extension=dateblock` to your `php.ini` (or a new
+file in its `conf.d/` directory).
 
 ### Building with Docker
 Don't want to install the build tools? If you have

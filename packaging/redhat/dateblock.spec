@@ -37,6 +37,11 @@ BuildRequires:  python3dist(wheel)
 # Python 3.9 needs this to read pyproject.toml
 BuildRequires:  python3dist(tomli)
 %endif
+BuildRequires:  php-devel
+
+# The PHP extension is loaded by PHP, not linked against; nothing should
+# depend on it as a library
+%global __provides_exclude_from ^%{php_extdir}/.*\.so$
 
 Requires:       %{name}-libs%{?_isa} = %{version}-%{release}
 
@@ -57,7 +62,7 @@ Summary:        Shared library for cron-style date calculations
 %description libs
 The libdateblock shared library; it works out the next moment in time
 matching a cron-style schedule (with optional seconds and drift).  It is
-used by the dateblock tool and its Python bindings.
+used by the dateblock tool and its Python and PHP bindings.
 
 %package devel
 Summary:        Development files for the dateblock library
@@ -77,6 +82,17 @@ Obsoletes:      python-dateblock < 1.0.3-2
 Python bindings for dateblock; block until (or just work out) the next
 moment in time matching a cron-style schedule.
 
+%package -n php-dateblock
+Summary:        PHP bindings for dateblock (cron-style blocking)
+Requires:       %{name}-libs%{?_isa} = %{version}-%{release}
+Requires:       php(zend-abi) = %{php_zend_api}
+Requires:       php(api) = %{php_core_api}
+
+%description -n php-dateblock
+PHP extension for dateblock; adds the dateblock() function, which blocks
+until (or just works out) the next moment in time matching a cron-style
+schedule.
+
 %prep
 %autosetup -p1
 
@@ -92,11 +108,22 @@ autoreconf --force --install
 export DATEBLOCK_SHARED=1
 %pyproject_wheel
 
+# So does the PHP extension (-Wl,-L keeps libtool from relinking it at
+# install time, which it does when it finds libdateblock.la)
+pushd php
+phpize
+%configure --with-libdateblock --with-php-config=%{_bindir}/php-config \
+   LDFLAGS="%{build_ldflags} -Wl,-L$PWD/../src/.libs"
+%make_build
+popd
+
 %install
 %make_install
 find %{buildroot} -name '*.la' -delete
 %pyproject_install
 %pyproject_save_files -l dateblock
+%{__make} -C php install INSTALL_ROOT=%{buildroot}
+install -D -p -m 0644 php/dateblock.ini %{buildroot}%{php_inidir}/40-dateblock.ini
 
 %check
 export TZ=UTC
@@ -107,6 +134,12 @@ export LD_LIBRARY_PATH=%{buildroot}%{_libdir}
 %pyproject_check_import
 export PYTHONPATH=%{buildroot}%{python3_sitearch}
 %{python3} -m unittest discover -v -s python/tests
+
+# The PHP extension, loaded from the buildroot
+cd php
+export TEST_PHP_EXECUTABLE=%{_bindir}/php NO_INTERACTION=1 REPORT_EXIT_STATUS=1
+export TEST_PHP_ARGS="-n -d extension=%{buildroot}%{php_extdir}/dateblock.so"
+%{_bindir}/php -n run-tests.php -q --show-diff tests
 
 %files
 %license COPYING
@@ -124,6 +157,12 @@ export PYTHONPATH=%{buildroot}%{python3_sitearch}
 %{_libdir}/pkgconfig/dateblock.pc
 
 %files -n python%{python3_pkgversion}-dateblock -f %{pyproject_files}
+
+%files -n php-dateblock
+%license COPYING
+%doc README.md
+%config(noreplace) %{php_inidir}/40-dateblock.ini
+%{php_extdir}/dateblock.so
 
 %changelog
 * Mon Oct 26 2026 Chris Caron <lead2gold@gmail.com> - 2.0.0-1

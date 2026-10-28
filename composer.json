@@ -1,0 +1,33 @@
+{
+    "name": "caronc/dateblock",
+    "type": "php-ext",
+    "description": "Block (sleep) until a cron-style moment in time",
+    "keywords": ["cron", "crontab", "sleep", "schedule", "date", "time"],
+    "homepage": "https://github.com/caronc/dateblock",
+    "license": "GPL-2.0-or-later",
+    "authors": [
+        {
+            "name": "Chris Caron",
+            "email": "lead2gold@gmail.com"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/caronc/dateblock/issues",
+        "source": "https://github.com/caronc/dateblock"
+    },
+    "require": {
+        "php": ">=8.0"
+    },
+    "php-ext": {
+        "extension-name": "dateblock",
+        "build-path": "php",
+        "os-families-exclude": ["windows"],
+        "configure-options": [
+            {
+                "name": "with-libdateblock",
+                "description": "Link against the installed libdateblock instead of building the dateblock engine in",
+                "needs-value": false
+            }
+        ]
+    }
+}

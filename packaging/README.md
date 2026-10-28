@@ -12,6 +12,8 @@ distributions.
 
 The Python package (PyPI) is built from `pyproject.toml` and `setup.py` at
 the top of the source tree; see [PyPI](#pypi-pip-install-dateblock) below.
+The PHP extension lives in `php/` and is described by `composer.json` at the
+top of the source tree; see [PIE](#pie-pie-install-caroncdateblock) below.
 
 Each `Dockerfile.<distro>` installs its build requirements straight from the
 matching packaging file (the spec's `BuildRequires`, `debian/control` or the
@@ -43,9 +45,18 @@ Podman when both are installed.
 | Shared library      | `dateblock-libs`    | `libdateblock1`     | `dateblock`        |
 | Headers, `.pc` file | `dateblock-devel`   | `libdateblock-dev`  | `dateblock`        |
 | Python bindings     | `python3-dateblock` | `python3-dateblock` | `python-dateblock` |
+| PHP extension       | `php-dateblock`     | `php-dateblock`     | `php-dateblock`    |
 
 Arch Linux packages the library and headers together with the tool, as is
 usual there.
+
+The PHP extension is built for each distribution's own PHP and turned on
+when installed (`/etc/php.d/40-dateblock.ini` on Fedora and EL, through
+`phpenmod` on Debian).  Arch Linux installs `/etc/php/conf.d/dateblock.ini`
+with the line commented out, as is usual there.  Repositories that offer
+several PHP versions side by side (ie: Remi's, or `php8.4-*` packages) name
+their builds after the PHP version; the package here is the base one they
+start from.
 
 ### Building without Docker
 On a machine running the matching distribution:
@@ -108,6 +119,19 @@ take a while (about 30 minutes for the full set). The files are written to
 Anyone on a platform without a wheel can still `pip install dateblock`; pip
 builds it from the source package instead, which needs a C++ compiler and
 the Python headers.
+
+## PIE (pie install caronc/dateblock)
+[PIE](https://github.com/php/pie) is PHP's extension installer (it replaces
+PECL).  It reads `composer.json`, downloads the source for a version tag
+from GitHub, builds `php/` with `phpize` (the C++ code is compiled straight
+into the extension) and turns it on.  Nothing is uploaded for it:
+[Packagist](https://packagist.org/packages/caronc/dateblock) picks up each
+new version tag by itself.
+
+PIE needs a C++ compiler and the PHP development files on the computer it
+runs on, and a 64-bit `time_t` (older 32-bit systems are refused, as
+everywhere else; see `INSTALL.md`).  Windows isn't supported (PIE needs
+ready-built Windows files for that).
 
 ## Man Page
 The man page is generated with [Ronn-NG](https://github.com/apjanke/ronn-ng).

@@ -1,6 +1,13 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+### Added
+- PHP bindings (PHP 8.0 and newer): `dateblock('0 0 9', ref: $tokyo)`
+  returns a `DateTimeImmutable`, reading the cron in the timezone of `$ref`.
+  Install with `pie install caronc/dateblock` or the `php-dateblock`
+  package.
+
 ## [2.0.0] - 2026-10-26
 The project is now called **dateblock** (it used to be datetools).
 

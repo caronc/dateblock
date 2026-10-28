@@ -1,0 +1,52 @@
+# Builds the PHP extension and runs its tests, on every supported PHP
+# version (Linux) and on macOS.  Nothing is published or kept: PIE users get
+# new versions from Packagist, which reads the version tags itself.
+name: PHP
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The action is pinned to an exact commit (a tag such as @v2 can be moved);
+# Dependabot (.github/dependabot.yml) opens a pull request when it has a new
+# release.
+jobs:
+  test:
+    name: PHP ${{ matrix.php }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        php: ['8.0', '8.1', '8.2', '8.3', '8.4', '8.5']
+        include:
+          - os: macos-latest
+            php: '8.5'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962  # 2.40.0
+        with:
+          php-version: ${{ matrix.php }}
+          tools: phpize, php-config
+          coverage: none
+
+      - name: Build
+        working-directory: php
+        run: |
+          phpize
+          ./configure
+          make
+
+      - name: Test
+        working-directory: php
+        env:
+          NO_INTERACTION: 1
+          REPORT_EXIT_STATUS: 1
+          TEST_PHP_ARGS: -q --show-diff
+        run: make test

@@ -79,6 +79,26 @@ build)
          python3 -m unittest discover -s python/tests
    done
 
+   # The PHP extension the same ways: linked against the library (as the
+   # distribution packages do), with the engine built in (as PIE does), and
+   # acting like Windows and macOS.  Each build cleans up after itself.
+   #  - $1: where the tests find libdateblock (only set for the tests;
+   #    libtool relinks the extension if it sees the library while building)
+   #  - the rest: ./configure options
+   php_build() {
+      libs=$1
+      shift
+      (cd php && phpize >/dev/null && ./configure -q "$@" && make -s &&
+       LD_LIBRARY_PATH=$libs TZ=UTC NO_INTERACTION=1 \
+          TEST_PHP_ARGS="-q --show-diff" make test &&
+       make -s distclean && phpize --clean >/dev/null)
+   }
+   php_build "$PWD/src/.libs" --with-libdateblock LDFLAGS=-Wl,-L$PWD/src/.libs
+   php_build ""
+   for flag in DATEBLOCK_TEST_NARROW_TIME DATEBLOCK_TEST_OLD_MKTIME; do
+      php_build "" CXXFLAGS="-O2 -D$flag"
+   done
+
    make dist
    cp dateblock-$version.tar.gz /out/
    ;;

@@ -8,6 +8,8 @@ Build-Depends:
  python3-all-dev,
  python3-setuptools,
  pybuild-plugin-pyproject,
+ dh-php,
+ php-dev,
 Standards-Version: 4.7.2
 Homepage: https://github.com/caronc/dateblock
 Vcs-Browser: https://github.com/caronc/dateblock
@@ -31,7 +33,7 @@ Description: cron-style date calculations - shared library
  The libdateblock shared library; it works out the next moment in time
  matching a cron-style schedule (with optional seconds and drift).
  .
- It is used by the dateblock tool and its Python bindings.
+ It is used by the dateblock tool and its Python and PHP bindings.
 
 Package: libdateblock-dev
 Section: libdevel
@@ -49,3 +51,12 @@ Depends: ${python3:Depends}, ${shlibs:Depends}, ${misc:Depends}
 Description: cron-style blocking (sleep until a moment in time) - Python 3
  Python bindings for dateblock; block until (or just work out) the next
  moment in time matching a cron-style schedule.
+
+Package: php-dateblock
+Section: php
+Architecture: any
+Depends: ${php:Depends}, ${shlibs:Depends}, ${misc:Depends}
+Description: cron-style blocking (sleep until a moment in time) - PHP
+ PHP extension for dateblock; adds the dateblock() function, which blocks
+ until (or just works out) the next moment in time matching a cron-style
+ schedule.

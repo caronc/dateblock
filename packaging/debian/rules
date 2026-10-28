@@ -1,35 +1,53 @@
 #!/usr/bin/make -f
-# The C++ library and tool build with autotools; the Python bindings are
-# then built with pybuild, linked against that library (DATEBLOCK_SHARED).
+# The C++ library and tool build with autotools.  The Python bindings are
+# then built with pybuild and the PHP extension with phpize, both linked
+# against that library (DATEBLOCK_SHARED, --with-libdateblock).
 export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 export PYBUILD_NAME = dateblock
 export DATEBLOCK_SHARED = 1
 export TZ = UTC
 
 PYBUILD = --buildsystem=pybuild
+PHP = --sourcedirectory=php
+export NO_INTERACTION = 1
 
 %:
-	dh $@
+	dh $@ --with php
 
 override_dh_auto_configure:
 	dh_auto_configure -- --disable-static
 	dh_auto_configure $(PYBUILD)
+	cd php && phpize
+	dh_auto_configure $(PHP) -- --with-libdateblock \
+		LDFLAGS="$$(dpkg-buildflags --get LDFLAGS) -Wl,-L$(CURDIR)/src/.libs"
 
 override_dh_auto_build:
 	dh_auto_build
 	dh_auto_build $(PYBUILD)
+	dh_auto_build $(PHP)
 
 override_dh_auto_test:
 	dh_auto_test
 	LD_LIBRARY_PATH=$(CURDIR)/src/.libs \
 	PYBUILD_TEST_ARGS="{interpreter} -m unittest discover -v -s $(CURDIR)/python/tests" \
 	PYBUILD_TEST_CUSTOM=1 dh_auto_test $(PYBUILD)
+	LD_LIBRARY_PATH=$(CURDIR)/src/.libs TEST_PHP_ARGS="-q --show-diff" \
+		dh_auto_test $(PHP)
 
 override_dh_auto_install:
 	dh_auto_install
 	dh_auto_install $(PYBUILD)
+	dh_auto_install $(PHP) -- INSTALL_ROOT=$(CURDIR)/debian/php-dateblock
 	find debian/tmp -name '*.la' -delete
+
+# PHP itself provides the symbols the extension uses, which dpkg-shlibdeps
+# can't see (so it warns about every one of them)
+override_dh_shlibdeps:
+	dh_shlibdeps -Nphp-dateblock
+	dh_shlibdeps -pphp-dateblock -- --warnings=0
 
 override_dh_auto_clean:
 	dh_auto_clean
 	dh_auto_clean $(PYBUILD)
+	if [ -f php/Makefile ]; then $(MAKE) -C php distclean; fi
+	cd php && phpize --clean
