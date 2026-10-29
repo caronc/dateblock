@@ -18,6 +18,7 @@ EXTRA_DIST = \
 	.dockerignore \
 	README.md \
 	INSTALL.md \
+	SECURITY.md \
 	COPYING \
 	LICENSE \
 	ChangeLog \
