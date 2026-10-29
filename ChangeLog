@@ -11,6 +11,14 @@ All notable changes to this project will be documented in this file.
   { timeZone: 'Asia/Tokyo' })` waits without blocking, and `next()` only
   works the time out.  Install with `npm install @caronc/dateblock`.
 
+### Changed
+- macOS and Windows wait with the system's own timer, set to the exact
+  moment, instead of waking every second: it still fires on time if the
+  computer sleeps or the clock is changed.  As a safety net the clock is
+  also checked once an hour, a minute before the moment, and every second
+  over the final minute.  Linux is unchanged (it already slept until the
+  exact time).
+
 ### Fixed
 - Node.js: a wait that spans the computer sleeping (or the clock being
   changed) now ends within a minute of the right moment, instead of late

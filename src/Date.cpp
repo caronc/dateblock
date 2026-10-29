@@ -29,14 +29,30 @@
 #include <vector>
 #include <ctype.h>
 #include <stdexcept>
+#include <new>
 #include "Date.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #else
 #include <sys/time.h>
+#endif
+
+#ifdef __APPLE__
+// BlockUntil() waits with a kqueue timer and asks Mach to say when the
+// clock is set
+#include <unistd.h>
+#include <sys/event.h>
+#include <mach/mach.h>
+#include <mach/host_notify.h>
+// Older SDKs only have the notice that also fires when the clock is slewed
+#ifndef HOST_NOTIFY_CALENDAR_SET
+#define HOST_NOTIFY_CALENDAR_SET HOST_NOTIFY_CALENDAR_CHANGE
+#endif
 #endif
 
 // The most values one field may expand to.  Time fields never get close
@@ -1809,6 +1825,329 @@ time_t Date::CronAfter(time_t after, const string& strIn, bool isISC,
    return NextTime(f, after, &zone);
 }
 
+namespace {
+   // How long the waits on macOS and Windows may last (in seconds) before
+   // the clock is checked again: an hour while far away, and one second
+   // at a time over the final minute
+   const time_t WAIT_HEARTBEAT = 3600;
+   const time_t WAIT_FINAL = 60;
+
+   // How long a wait may last with no system timer at all (a second at a
+   // time, as Ctrl-C has to be noticed too)
+   const double WAIT_FALLBACK = 1.0;
+
+#if defined(__APPLE__) || defined(_WIN32)
+   // The longest a wait may last when one of the helpers below (the
+   // system timer, the clock-change notice or the Ctrl-C event) couldn't be
+   // set up: without them, only regular checks notice the time
+   const double WAIT_UNAIDED = 60.0;
+#endif
+
+   // Sleeps for 'seconds' (or less if a signal arrives); the last resort
+   // when the system timers below can't be used
+   void SleepFor(double seconds)
+   {
+   #ifdef _WIN32
+      Sleep((DWORD)(seconds * 1000.0) + 1);
+   #else
+      struct timespec rel;
+      rel.tv_sec = (time_t)seconds;
+      rel.tv_nsec = (long)((seconds - (double)rel.tv_sec) * 1e9);
+      if (rel.tv_nsec < 0 || rel.tv_nsec > 999999999L)
+         rel.tv_nsec = 0;
+      nanosleep(&rel, NULL);
+   #endif
+   }
+
+#if defined(__APPLE__)
+   // Waits until the wall clock reaches 'until', for 'step' seconds at
+   // most.  Wakes early when:
+   //  - the kqueue timer fires; it is set to the wall-clock moment and
+   //    counts while the Mac sleeps (the same flags Apple's own
+   //    libdispatch uses for wall-clock timers)
+   //  - the clock is set (Mach's calendar notice), so the caller can
+   //    check where it stands
+   //  - a signal arrives (ie: Ctrl-C)
+   // Returns false (having waited for nothing) if neither the timer nor
+   // the notice could be set up.
+   bool WaitApple(time_t until, double step)
+   {
+      int kq = kqueue();
+      if (kq < 0)
+         return false;
+
+      struct kevent changes[2];
+      int count = 0;
+
+      // The timer takes nanoseconds since 1970; a moment it can't hold
+      // (before 1970, or after the year 2262) is left to the regular
+      // checks
+   #ifdef NOTE_MACH_CONTINUOUS_TIME
+      if (until > 0 && until <= INT64_MAX / 1000000000)
+      {
+         EV_SET(&changes[count], 1, EVFILT_TIMER,
+                EV_ADD | EV_ONESHOT | EV_RECEIPT,
+                NOTE_ABSOLUTE | NOTE_NSECONDS | NOTE_MACH_CONTINUOUS_TIME,
+                (int64_t)until * 1000000000, NULL);
+         count++;
+      }
+   #endif
+
+      // A port Mach sends a message to whenever the clock is set.  kqueue
+      // only watches port sets, so the port goes into a set of its own.
+      mach_port_t task = mach_task_self();
+      mach_port_t port = MACH_PORT_NULL, portSet = MACH_PORT_NULL;
+      if (mach_port_allocate(task, MACH_PORT_RIGHT_PORT_SET,
+                             &portSet) != KERN_SUCCESS)
+         portSet = MACH_PORT_NULL;
+      if (portSet != MACH_PORT_NULL &&
+          mach_port_allocate(task, MACH_PORT_RIGHT_RECEIVE,
+                             &port) != KERN_SUCCESS)
+         port = MACH_PORT_NULL;
+      if (port != MACH_PORT_NULL &&
+          mach_port_move_member(task, port, portSet) == KERN_SUCCESS)
+      {
+         // mach_host_self() hands us a reference that has to be given back
+         mach_port_t host = mach_host_self();
+         kern_return_t asked = host_request_notification(
+               host, HOST_NOTIFY_CALENDAR_SET, port);
+         if (host != MACH_PORT_NULL)
+            mach_port_deallocate(task, host);
+         if (asked == KERN_SUCCESS)
+         {
+            EV_SET(&changes[count], portSet, EVFILT_MACHPORT,
+                   EV_ADD | EV_RECEIPT, 0, 0, NULL);
+            count++;
+         }
+      }
+
+      // With EV_RECEIPT every change reports back, and 'data' is 0 when
+      // it was accepted
+      bool timer = false, notice = false;
+      struct kevent results[2];
+      struct timespec zero = {0, 0};
+      int got = (count > 0) ? kevent(kq, changes, count, results, count, &zero)
+                            : 0;
+      for (int i = 0; i < got && i < count; i++)
+      {
+         if (!(results[i].flags & EV_ERROR) || results[i].data != 0)
+            continue;
+         if (results[i].filter == EVFILT_TIMER)
+            timer = true;
+         else if (results[i].filter == EVFILT_MACHPORT)
+            notice = true;
+      }
+
+      if (timer || notice)
+      {
+         // Without both, a long wait could miss the moment
+         if (!(timer && notice) && step > WAIT_UNAIDED)
+            step = WAIT_UNAIDED;
+
+         struct timespec wait;
+         wait.tv_sec = (time_t)step;
+         wait.tv_nsec = (long)((step - (double)wait.tv_sec) * 1e9);
+         if (wait.tv_nsec < 0 || wait.tv_nsec > 999999999L)
+            wait.tv_nsec = 0;
+
+         // The timer, a clock change, a signal (EINTR) or the step
+         // running out; each one only means "look at the clock again"
+         struct kevent fired;
+         kevent(kq, NULL, 0, &fired, 1, &wait);
+      }
+
+      // Removing the port also cancels the notice and drops any message
+      if (port != MACH_PORT_NULL)
+         mach_port_mod_refs(task, port, MACH_PORT_RIGHT_RECEIVE, -1);
+      if (portSet != MACH_PORT_NULL)
+         mach_port_mod_refs(task, portSet, MACH_PORT_RIGHT_PORT_SET, -1);
+      close(kq);
+      return timer || notice;
+   }
+#endif
+
+#ifdef _WIN32
+   // Ctrl-C, Ctrl-Break and closing the console wake every wait in
+   // progress, so the caller can react (Python raises KeyboardInterrupt).
+   // The handler then lets the next one run as usual (returns FALSE).
+   struct CtrlWatch
+   {
+      CRITICAL_SECTION lock;
+      vector<HANDLE> waiting;
+      bool active;
+   };
+   CtrlWatch* g_ctrlWatch = NULL;
+
+   BOOL WINAPI OnConsoleCtrl(DWORD)
+   {
+      CtrlWatch* watch = g_ctrlWatch;
+      if (watch)
+      {
+         EnterCriticalSection(&watch->lock);
+         for (size_t i = 0; i < watch->waiting.size(); i++)
+            SetEvent(watch->waiting[i]);
+         LeaveCriticalSection(&watch->lock);
+      }
+      return FALSE;
+   }
+
+   CtrlWatch* MakeCtrlWatch()
+   {
+      CtrlWatch* watch = new (nothrow) CtrlWatch;
+      if (!watch)
+         return NULL;
+      InitializeCriticalSection(&watch->lock);
+      g_ctrlWatch = watch;
+      watch->active = (SetConsoleCtrlHandler(OnConsoleCtrl, TRUE) != 0);
+      return watch;
+   }
+
+   // Made once and never freed: the console can call OnConsoleCtrl()
+   // while the program is exiting
+   CtrlWatch* TheCtrlWatch()
+   {
+      static CtrlWatch* watch = MakeCtrlWatch();
+      return (watch && watch->active) ? watch : NULL;
+   }
+
+   // An event that Ctrl-C sets while we wait, or NULL if there isn't one
+   HANDLE CtrlWakeStart()
+   {
+      CtrlWatch* watch = TheCtrlWatch();
+      if (!watch)
+         return NULL;
+      HANDLE wake = CreateEventW(NULL, TRUE, FALSE, NULL);
+      if (!wake)
+         return NULL;
+      bool added = true;
+      EnterCriticalSection(&watch->lock);
+      try
+      {
+         watch->waiting.push_back(wake);
+      }
+      catch (...)
+      {
+         added = false;
+      }
+      LeaveCriticalSection(&watch->lock);
+      if (!added)
+      {
+         CloseHandle(wake);
+         return NULL;
+      }
+      return wake;
+   }
+
+   void CtrlWakeStop(HANDLE wake)
+   {
+      if (!wake)
+         return;
+      CtrlWatch* watch = TheCtrlWatch();
+      if (watch)
+      {
+         EnterCriticalSection(&watch->lock);
+         watch->waiting.erase(remove(watch->waiting.begin(),
+                                     watch->waiting.end(), wake),
+                              watch->waiting.end());
+         LeaveCriticalSection(&watch->lock);
+      }
+      CloseHandle(wake);
+   }
+
+   // Waits until the wall clock reaches 'until', for 'step' seconds at
+   // most.  Wakes early when:
+   //  - the waitable timer fires; it is set to the moment in UTC, and
+   //    Windows moves it when the clock is changed and fires it on
+   //    resume if the moment passed while asleep
+   //  - Ctrl-C is pressed
+   // Returns false (having waited for nothing) if neither could be set up.
+   bool WaitWindows(time_t until, double step)
+   {
+      // The timer takes 100 ns steps since 1601; a moment it can't hold
+      // is left to the regular checks
+      const long long FROM_1601 = 11644473600LL;
+      const long long PER_SECOND = 10000000LL;
+      HANDLE timer = NULL;
+      if ((long long)until > -FROM_1601 &&
+          (long long)until <= LLONG_MAX / PER_SECOND - FROM_1601)
+      {
+         timer = CreateWaitableTimerW(NULL, TRUE, NULL);
+         LARGE_INTEGER due;
+         due.QuadPart = ((long long)until + FROM_1601) * PER_SECOND;
+         if (timer && !SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE))
+         {
+            CloseHandle(timer);
+            timer = NULL;
+         }
+      }
+
+      HANDLE wake = CtrlWakeStart();
+      if (!timer && !wake)
+         return false;
+
+      // Without the timer, a long wait could miss the moment; without the
+      // Ctrl-C event, Ctrl-C is only noticed when we wake
+      if (!timer && step > WAIT_UNAIDED)
+         step = WAIT_UNAIDED;
+      if (!wake && step > WAIT_FALLBACK)
+         step = WAIT_FALLBACK;
+
+      HANDLE handles[2];
+      DWORD count = 0;
+      if (timer)
+         handles[count++] = timer;
+      if (wake)
+         handles[count++] = wake;
+
+      // The timer, Ctrl-C or the step running out; each one only means
+      // "look at the clock again"
+      WaitForMultipleObjects(count, handles, FALSE, (DWORD)(step * 1000.0) + 1);
+
+      CtrlWakeStop(wake);
+      if (timer)
+         CloseHandle(timer);
+      return true;
+   }
+#endif
+}
+
+//------------------------------------------------
+//
+//  Function: WaitStep
+//
+//  Desc: How long the next wait on macOS and Windows may last before the
+//        clock is checked again (see Date.h).
+//
+//------------------------------------------------
+double Date::WaitStep(time_t until, const struct timespec& now)
+{
+   if (until <= now.tv_sec)
+   {
+      return 0.0;
+   }
+
+   // Checked before subtracting: with a clock set before 1970 and a far
+   // away 'until', the difference wouldn't fit in a time_t
+   if ((now.tv_sec < 0 && until > numeric_limits<time_t>::max() + now.tv_sec) ||
+       until - now.tv_sec > WAIT_HEARTBEAT + WAIT_FINAL)
+   {
+      return (double)WAIT_HEARTBEAT;
+   }
+
+   // Nanoseconds outside of 0-999999999 can't be real; count them as 0
+   double fraction = (now.tv_nsec >= 0 && now.tv_nsec <= 999999999L)
+                        ? now.tv_nsec / 1e9 : 0.0;
+   double left = (double)(until - now.tv_sec) - fraction;
+   if (left > (double)WAIT_FINAL)
+   {
+      // Wake a minute before, for the final approach
+      return left - (double)WAIT_FINAL;
+   }
+
+   // The last minute: on to the next whole second ('until' is one)
+   return 1.0 - fraction;
+}
+
 //------------------------------------------------
 //
 //  Function: BlockUntil
@@ -1816,7 +2155,12 @@ time_t Date::CronAfter(time_t after, const string& strIn, bool isISC,
 //  Desc: Sleeps until the wall clock reaches a specific moment.  Sleeping
 //        until an exact time (rather than for a number of seconds) means
 //        we wake up right on the second, even if the clock was adjusted
-//        while we slept.
+//        or the computer slept meanwhile.
+//         - Linux sleeps until the exact time in one go.
+//         - macOS and Windows set a system timer for the exact time, and
+//           also wake now and then (see WaitStep()) to check the clock
+//           themselves, in case the timer doesn't fire.
+//         - If those timers can't be used, it sleeps a second at a time.
 //
 //------------------------------------------------
 unsigned long Date::BlockUntil(const Date& until)
@@ -1851,29 +2195,25 @@ unsigned long Date::BlockUntil(time_t until)
    // Any other error: fall back to sleeping a second at a time below
 #endif
 
-   // macOS and Windows can't sleep until an exact time, so sleep for
-   // whatever is left instead.  Sleep at most a second at a time so that
-   // Ctrl-C is noticed quickly; the caller loops until we return 0.
    struct timespec now;
    NowPrecise(now);
-   if (now.tv_sec >= until)
+   double step = WaitStep(until, now);
+   if (step <= 0.0)
    {
       return 0;
    }
 
-   // A whole second while more than one is left, otherwise just what is
-   // left of the last one ('until - now' isn't worked out: with a clock
-   // set before 1970 and a far away 'until' it could overflow)
-   double chunk = (until - 1 > now.tv_sec) ? 1.0
-                                           : 1.0 - now.tv_nsec / 1e9;
-#ifdef _WIN32
-   Sleep((DWORD)(chunk * 1000.0) + 1);
-#else
-   struct timespec rel;
-   rel.tv_sec = (time_t)chunk;
-   rel.tv_nsec = (long)((chunk - (double)rel.tv_sec) * 1e9);
-   nanosleep(&rel, NULL);
+   bool waited = false;
+#if defined(__APPLE__)
+   waited = WaitApple(until, step);
+#elif defined(_WIN32)
+   waited = WaitWindows(until, step);
 #endif
+   if (!waited)
+   {
+      // No system timer: wake every second to check the clock
+      SleepFor(step < WAIT_FALLBACK ? step : WAIT_FALLBACK);
+   }
 
    return SecondsLeft(until, Now());
 }

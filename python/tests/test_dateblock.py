@@ -197,6 +197,17 @@ class DateblockTests(unittest.TestCase):
         self.assertIs(result.tzinfo, plus14)
         self.assertLessEqual(result, datetime.now(timezone.utc))
 
+    def test_blocking_wakes_right_on_the_second(self):
+        # A few seconds away, so the wait goes through several steps (the
+        # system timer and the final second-by-second checks).  It must
+        # never wake early; a busy computer may take a moment longer.
+        target = int(_time.time()) + 3
+        result = db("/1", ref=target - 1)
+        woke = _time.time()
+        self.assertEqual(result, datetime.fromtimestamp(target))
+        self.assertGreaterEqual(woke, target)
+        self.assertLess(woke - target, 2.0)
+
     def test_tzinfo_error_is_raised(self):
         with self.assertRaises(ZeroDivisionError):
             db("*/1", ref=datetime(2025, 1, 1, tzinfo=_BrokenZone()),

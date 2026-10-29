@@ -258,7 +258,9 @@ class Date
      //    already passed).
      //  - Otherwise returns the number of seconds still left; call it again
      //    to keep waiting.  This happens when a signal wakes us up early,
-     //    and (on macOS and Windows) after every second of sleep.
+     //    and (on macOS and Windows) after each WaitStep() of sleep.
+     //  - The wait follows the wall clock, so it still ends on time if the
+     //    computer sleeps or its clock is changed meanwhile.
      //  - A struct tm is a local date/time, read the same way mktime()
      //    reads it (set tm_isdst to -1 to let it work out daylight
      //    saving).  Throws std::out_of_range if it isn't a date that can
@@ -266,6 +268,15 @@ class Date
      static unsigned long BlockUntil(const Date& until);
      static unsigned long BlockUntil(time_t until);
      static unsigned long BlockUntil(const struct tm& until);
+
+     // How long BlockUntil() sleeps (in seconds) on macOS and Windows
+     // before it looks at the clock again; 0 once 'until' has arrived.
+     // The system's own timer wakes it right on time; these regular
+     // checks are a safety net in case it doesn't.
+     //  - More than an hour and a minute away: an hour.
+     //  - Otherwise: until a minute before 'until'.
+     //  - The last minute: until the next whole second.
+     static double WaitStep(time_t until, const struct timespec& now);
 
    private:
      struct tm m_tmObj;

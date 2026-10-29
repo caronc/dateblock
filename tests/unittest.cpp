@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <limits>
+#include <chrono>
 #include <climits>
 #include <sstream>
 #include <string>
@@ -1319,6 +1320,83 @@ static int CheckExtras()
    return 0;
 }
 
+// The current time, with the fraction of the second
+static struct timespec At(time_t sec, long nsec)
+{
+   struct timespec ts;
+   ts.tv_sec = sec;
+   ts.tv_nsec = nsec;
+   return ts;
+}
+
+static int CheckWaiting()
+{
+   // How long each wait lasts on macOS and Windows before the clock is
+   // checked again
+   const time_t biggest = numeric_limits<time_t>::max();
+   const time_t smallest = numeric_limits<time_t>::min();
+   struct Step
+   {
+      time_t until;
+      struct timespec now;
+      double expect;
+   } steps[] = {
+      // The moment has arrived (or passed): no wait
+      {1000, At(1000, 0), 0.0},
+      {1000, At(1000, 500000000L), 0.0},
+      {1000, At(5000, 0), 0.0},
+      {smallest, At(0, 0), 0.0},
+      // Far away: an hour at a time
+      {1000 + 3661, At(1000, 0), 3600.0},
+      {1000 + 86400 * 365, At(1000, 0), 3600.0},
+      {biggest, At(0, 0), 3600.0},
+      // No overflow with a clock set before 1970
+      {biggest, At(smallest + 1, 0), 3600.0},
+      {biggest, At(-1, 999999999L), 3600.0},
+      // Within the hour: wake a minute before
+      {1000 + 3660, At(1000, 0), 3600.0},
+      {1000 + 120, At(1000, 0), 60.0},
+      {1000 + 120, At(1000, 250000000L), 59.75},
+      {1000 + 61, At(1000, 0), 1.0},
+      // The last minute: on to the next whole second
+      {1000 + 60, At(1000, 0), 1.0},
+      {1000 + 30, At(1000, 400000000L), 0.6},
+      {1000 + 1, At(1000, 900000000L), 0.1},
+      // Nanoseconds that can't be real count as 0
+      {1000 + 30, At(1000, -5), 1.0},
+      {1000 + 30, At(1000, 1000000000L), 1.0},
+      {1000 + 120, At(1000, 2000000000L), 60.0},
+   };
+   for (size_t i = 0; i < sizeof(steps) / sizeof(steps[0]); i++)
+   {
+      double got = Date::WaitStep(steps[i].until, steps[i].now);
+      if (got < steps[i].expect - 1e-6 || got > steps[i].expect + 1e-6)
+      {
+         cerr << "WaitStep() #" << i << " gave " << got << ", expected "
+              << steps[i].expect << endl;
+         return Fail("WaitStep() worked out the wrong wait");
+      }
+   }
+
+   // Nothing to wait for
+   if (Date::BlockUntil((time_t)0) != 0 || Date::BlockUntil(smallest) != 0)
+      return Fail("BlockUntil() a moment in the past should not wait");
+
+   // A real wait ends right on the second, never before (a busy computer
+   // may take a moment longer to get back to us)
+   using namespace std::chrono;
+   time_t target = time(NULL) + 2;
+   while (Date::BlockUntil(target) > 0);
+   double woke = duration<double>(system_clock::now().time_since_epoch()).count();
+   if (woke < (double)target || woke > (double)target + 2.0)
+   {
+      cerr << "BlockUntil() woke at " << fixed << woke << " for " << target
+           << endl;
+      return Fail("BlockUntil() woke up at the wrong time");
+   }
+   return 0;
+}
+
 int main()
 {
    /* Create Reference Time */
@@ -1412,7 +1490,8 @@ int main()
    if (CheckExtras() || CheckLeapYears() || CheckDayMatching() ||
        CheckUnsetFields() || CheckSteps() || CheckHardening() ||
        CheckDriftLists() || CheckDaylightSaving() || CheckTimeZones() ||
-       CheckParser() || CheckErrorMessages() || CheckEdges())
+       CheckParser() || CheckErrorMessages() || CheckEdges() ||
+       CheckWaiting())
       return 1;
    return 0;
 }
