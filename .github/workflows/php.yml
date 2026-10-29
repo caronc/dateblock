@@ -1,6 +1,7 @@
 # Builds the PHP extension and runs its tests, on every supported PHP
-# version (Linux) and on macOS.  Nothing is published or kept: PIE users get
-# new versions from Packagist, which reads the version tags itself.
+# version (Linux) and on macOS, and installs it with PIE from this checkout.
+# Nothing is published or kept: PIE users get new versions from Packagist,
+# which reads the version tags itself.
 name: PHP
 
 on:
@@ -50,3 +51,32 @@ jobs:
           REPORT_EXIT_STATUS: 1
           TEST_PHP_ARGS: -q --show-diff
         run: make test
+
+  # Installs the extension the way users get it: PIE reads composer.json,
+  # builds php/ and turns the extension on.  It uses this checkout instead
+  # of Packagist, so a broken composer.json shows up here before a version
+  # tag is pushed.
+  pie:
+    name: PIE install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962  # 2.40.0
+        with:
+          php-version: '8.5'
+          tools: composer, pie, phpize, php-config
+          coverage: none
+
+      - name: Check composer.json
+        run: composer validate --strict
+
+      - name: Install with PIE
+        run: |
+          pie repository:add path "$GITHUB_WORKSPACE"
+          pie install --no-interaction "caronc/dateblock:*@dev"
+
+      - name: Check it is loaded
+        run: |
+          php -m | grep -x dateblock
+          php -r 'echo dateblock("0 0 9", block: false)->format(DATE_ATOM), PHP_EOL;'

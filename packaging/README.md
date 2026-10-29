@@ -128,8 +128,7 @@ the Python headers.
 PECL).  It reads `composer.json`, downloads the source for a version tag
 from GitHub, builds `php/` with `phpize` (the C++ code is compiled straight
 into the extension) and turns it on.  Nothing is uploaded for it:
-[Packagist](https://packagist.org/packages/caronc/dateblock) picks up each
-new version tag by itself.
+[Packagist](https://packagist.org/packages/caronc/dateblock) picks up each new version tag by itself.
 
 PIE needs a C++ compiler and the PHP development files on the computer it
 runs on, and a 64-bit `time_t` (older 32-bit systems are refused, as
