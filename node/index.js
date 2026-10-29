@@ -35,9 +35,11 @@ try {
 }
 const { cronAfter } = addon;
 
-// The longest a single setTimeout() can wait (about 24.8 days); longer
-// waits are made of several
-const LONGEST_TIMER = 2 ** 31 - 1;
+// How often a long wait checks the clock again (in milliseconds).  Timers
+// stop counting while the computer sleeps and don't notice the clock being
+// changed, so a long wait is made of short timers that each look at the
+// real time when they wake.
+const CHECK_EVERY = 60 * 1000;
 
 // Returns a function that gives [year, month, day, hour, minute, second]
 // for a moment (in seconds since the epoch) as the clocks in 'timeZone'
@@ -165,8 +167,7 @@ function waitUntil(when, signal) {
         }
         resolve();
       } else {
-        // Check the clock again on waking; long waits take several timers
-        timer = setTimeout(tick, Math.min(left, LONGEST_TIMER));
+        timer = setTimeout(tick, Math.min(left, CHECK_EVERY));
       }
     };
 

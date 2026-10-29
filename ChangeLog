@@ -11,6 +11,11 @@ All notable changes to this project will be documented in this file.
   { timeZone: 'Asia/Tokyo' })` waits without blocking, and `next()` only
   works the time out.  Install with `npm install @caronc/dateblock`.
 
+### Fixed
+- Node.js: a wait that spans the computer sleeping (or the clock being
+  changed) now ends within a minute of the right moment, instead of late
+  by however long the computer slept.
+
 ## [2.0.0] - 2026-10-26
 The project is now called **dateblock** (it used to be datetools).
 

@@ -94,7 +94,9 @@ as `next()`, plus:
 | `signal` | An `AbortSignal`; aborting it stops the wait (the promise is rejected with the signal's reason). |
 
 It returns a promise for the `Date` it waited for.  Long waits (even years)
-are fine.
+are fine.  The clock is checked at least once a minute, so a computer that
+was asleep (or had its clock changed) still wakes within a minute of the
+right moment.
 
 ### Errors
 - A cron string that isn't written correctly throws a `SyntaxError` saying

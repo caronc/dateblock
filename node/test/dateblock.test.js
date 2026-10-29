@@ -117,6 +117,23 @@ test('dateblock() waits until the moment arrives', async () => {
   assert.ok(Date.now() - quick < 1000);
 });
 
+test('dateblock() wakes on time after the computer sleeps', async (t) => {
+  // While a computer sleeps the clock moves on but timers don't count, so
+  // the clock (Date.now) and the timers are mocked separately
+  let clock = Date.UTC(2026, 0, 1);
+  t.mock.method(Date, 'now', () => clock);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let found;
+  dateblock('0 0 9', { timeZone: 'UTC' }).then((when) => { found = when; });
+
+  // Asleep from midnight until 9:00:30; the next check (within a minute of
+  // timer time) sees the moment has passed
+  clock = Date.UTC(2026, 0, 1, 9, 0, 30);
+  t.mock.timers.tick(60 * 1000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.strictEqual(found?.toISOString(), '2026-01-01T09:00:00.000Z');
+});
+
 test('dateblock() can be stopped with an AbortSignal', async () => {
   const controller = new AbortController();
   const waiting = dateblock('0 0 0 1 1', { signal: controller.signal });
