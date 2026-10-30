@@ -73,6 +73,8 @@ __Allowed options__:
   -x [ --drift ] arg    Additional drift time (in seconds).
   -z [ --timezone ] arg Timezone to read the schedule in (ie:
                         America/Toronto); defaults to this computer's.
+  -C [ --count ] arg    List the next N times (1-1000) instead of
+                        waiting; nothing is run.
 
   Anything after the options (or after --) is a command to run once the
   time is reached.
@@ -158,6 +160,25 @@ dateblock -t -z Asia/Tokyo -c "0 0 9"
 Current Time : 2026-10-24 22:05:00 JST (Sat)
 Block Until  : 2026-10-25 09:00:00 JST (Sun)
 ```
+
+### Listing the next few times:
+__--count__ (__-C__) lists the next few times a schedule matches, without
+waiting. It is the quickest way to check a schedule, and with __--isc__
+(__-i__) a handy way to learn how a crontab entry behaves:
+```bash
+dateblock -C 5 -i -c "0 9 * * Mon-Fri"
+Current Time : 2026-10-30 16:53:37 (Fri)
+Next Times   : 2026-11-02 09:00:00 (Mon)
+               2026-11-03 09:00:00 (Tue)
+               2026-11-04 09:00:00 (Wed)
+               2026-11-05 09:00:00 (Thu)
+               2026-11-06 09:00:00 (Fri)
+```
+- Up to 1000 times can be listed.  The first is the one dateblock would
+  wait for.
+- Nothing is run: a command after the options is only shown.
+- In the rare case that no later time exists (ie: past the last date the
+  computer can show), the list just ends early and a note says so.
 
 ### Running a command:
 Put a command (and its arguments) after the options, and dateblock runs it
@@ -363,9 +384,28 @@ asyncio.run(main())
   little, but if you keep thousands of waits going at once, prefer one
   task that waits and then hands the work out.
 
+To see the next few times without waiting, use `dateblock.upcoming()`.  It
+takes the same `cron`, `ref` and `isc`, plus a `count` (just the next one
+unless given, at most 1000), and returns a tuple of `datetime`s, earliest first:
+```python
+import dateblock
+
+for when in dateblock.upcoming("0 9 * * Mon-Fri", 3, isc=True):
+    print(when.strftime("%a %Y-%m-%d %H:%M"))
+```
+
+- The `datetime`s are the same kind `dateblock()` returns: aware ones in
+  `ref`'s own timezone, otherwise naive ones in this computer's.
+- When the clocks go back and a time happens twice, both are listed; the
+  second naive one has `fold=1`, so its `timestamp()` is right.
+- The tuple is shorter than `count` only when no later time can be shown
+  (ie: past the year 9999).
+- `dateblock.COUNT_DEFAULT` (1) and `dateblock.COUNT_MAX` (1000) hold the
+  limits.
+
 ### DateBlock PHP Bindings
-The PHP extension adds a single `dateblock()` function that works the same
-way:
+The PHP extension adds a `dateblock()` function that works the same way
+(and `dateblock_upcoming()`, below):
 ```php
 <?php
 // Returns the moment it will unblock at (a DateTimeImmutable)
@@ -397,12 +437,25 @@ A few things worth knowing:
 - Signal handlers set with `pcntl_signal()` run once it returns; Ctrl-C
   still ends the script straight away unless a handler is set for it.
 
+`dateblock_upcoming()` lists the next few times without waiting.  It takes
+the same `$cron`, `$ref` and `$isc`, plus a `$count` (just the next one
+unless given, at most 1000), and returns an array of `DateTimeImmutable`, earliest first,
+in the same timezone `dateblock()` would use:
+```php
+<?php
+foreach (dateblock_upcoming('0 9 * * Mon-Fri', 3, isc: true) as $when) {
+    echo $when->format('D Y-m-d H:i'), "\n";
+}
+```
+The array is shorter than `$count` only when no later time exists.  The
+limits are in `DATEBLOCK_COUNT_DEFAULT` and `DATEBLOCK_COUNT_MAX`.
+
 ### DateBlock Node.js Bindings
 The Node.js package waits without blocking: `dateblock()` returns a promise,
 and the rest of your program keeps running in the meantime.
 ```javascript
-import { dateblock, next } from '@caronc/dateblock';
-// or, in CommonJS: const { dateblock, next } = require('@caronc/dateblock');
+import { dateblock, next, upcoming } from '@caronc/dateblock';
+// or, in CommonJS: const { dateblock, next, upcoming } = require('@caronc/dateblock');
 
 // When is the next 20 minute mark?  (a Date; nothing waits)
 const when = next('* /20');
@@ -419,6 +472,9 @@ next('* * * * *', { isc: true });
 // Timezones: 9:00 in Tokyo, whatever timezone this computer is in
 await dateblock('0 0 9', { timeZone: 'Asia/Tokyo' });
 
+// The next 3 weekday mornings (an array of Dates; nothing waits)
+upcoming('0 9 * * Mon-Fri', { isc: true, count: 3 });
+
 // Stop waiting early with an AbortSignal
 const controller = new AbortController();
 dateblock('0 0 9', { signal: controller.signal }).catch(() => {});
@@ -431,6 +487,9 @@ A few things worth knowing:
 - An invalid cron string throws a `SyntaxError` saying what is wrong; a cron
   that can never happen (such as February 31st), an unknown timezone or a
   reference too far away throws a `RangeError`.
+- `upcoming()` takes `next()`'s options plus `count` (just the next one
+  unless given, at most 1000; also exported as `COUNT_DEFAULT` and `COUNT_MAX`).  The array
+  is shorter than `count` only when no later time fits in a `Date`.
 - TypeScript types are included.
 
 ## Installation

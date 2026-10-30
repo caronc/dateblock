@@ -7,9 +7,18 @@ ZEND_BEGIN_ARG_WITH_RETURN_OBJ_INFO_EX(arginfo_dateblock, 0, 1, DateTimeImmutabl
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, isc, _IS_BOOL, 0, "false")
 ZEND_END_ARG_INFO()
 
+ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_dateblock_upcoming, 0, 1, IS_ARRAY, 0)
+	ZEND_ARG_TYPE_INFO(0, cron, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, count, IS_LONG, 0, "DATEBLOCK_COUNT_DEFAULT")
+	ZEND_ARG_OBJ_TYPE_MASK(0, ref, DateTimeInterface, MAY_BE_LONG|MAY_BE_DOUBLE|MAY_BE_NULL, "null")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, isc, _IS_BOOL, 0, "false")
+ZEND_END_ARG_INFO()
+
 ZEND_FUNCTION(dateblock);
+ZEND_FUNCTION(dateblock_upcoming);
 
 static const zend_function_entry ext_functions[] = {
 	ZEND_FE(dateblock, arginfo_dateblock)
+	ZEND_FE(dateblock_upcoming, arginfo_dateblock_upcoming)
 	ZEND_FE_END
 };

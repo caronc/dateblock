@@ -20,6 +20,11 @@ All notable changes to this project will be documented in this file.
 - crontab's shortcuts: `@hourly`, `@daily` (`@midnight`), `@weekly`,
   `@monthly` and `@yearly` (`@annually`), optionally followed by a drift
   (`@daily +30`).
+- List the next few times without waiting, to check a schedule:
+  `dateblock -C 5 -i -c '0 9 * * Mon-Fri'`, and in the bindings
+  `dateblock.upcoming()` (Python), `dateblock_upcoming()` (PHP) and
+  `upcoming()` (Node.js).  Up to 1000; just the next one unless told
+  otherwise.
 
 ### Changed
 - macOS and Windows wait with the system's own timer, set to the exact
@@ -35,6 +40,8 @@ All notable changes to this project will be documented in this file.
   can upset a terminal or a log.
 - The Python, PHP and Node.js bindings only copy the start of a huge cron
   string before refusing it, instead of all of it.
+- Python: when the clocks go back and a time happens twice, the second one
+  comes back with `fold=1`, so its `timestamp()` is right.
 - Node.js: a wait that spans the computer sleeping (or the clock being
   changed) now ends within a minute of the right moment, instead of late
   by however long the computer slept.

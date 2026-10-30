@@ -254,6 +254,102 @@ static bool StartFrom(zval *ref, zval *start)
    return ok;
 }
 
+// Where a search starts: the moment 'ref' stands for (see StartFrom()) and
+// the timezone (a DateTimeZone) the cron is read in.  The moment is read
+// straight from the date: PHP 8.0's getTimestamp() works it out again from
+// the clock time, which picks the wrong one of the two 1:30s when the
+// clocks go back.  Returns false with an exception set; otherwise the
+// caller releases 'tz'.
+static bool Origin(zval *ref, time_t &after, zval *tz)
+{
+   zval start;
+   if (!StartFrom(ref, &start))
+   {
+      return false;
+   }
+   bool ok = false;
+   timelib_time *at = Z_PHPDATE_P(&start)->time;
+   if (at != NULL && !YearFits(at->y))
+   {
+      zend_argument_value_error(3, "is outside of the supported time range");
+   }
+   else if (at != NULL && at->sse_uptodate && Call(&start, "getTimezone", tz))
+   {
+      after = (time_t)at->sse;
+      ok = true;
+   }
+   zval_ptr_dtor(&start);
+   if (!ok && !EG(exception))
+   {
+      zend_throw_error(NULL, "The time found could not be shown as a date");
+   }
+   return ok;
+}
+
+// True if the C++ exception being handled only means no later moment
+// can be found or shown.  Call it from inside a catch block.
+static bool RanOut()
+{
+   try
+   {
+      throw;
+   }
+   catch (const std::runtime_error &)
+   {
+      return true;
+   }
+   catch (const std::out_of_range &)
+   {
+      return true;
+   }
+   catch (...)
+   {
+      return false;
+   }
+}
+
+// The next match of 'cron' after 'after', read in the timezone 'tz', as a
+// DateTimeImmutable in 'ret' (and seconds since the epoch in 'when').
+// Returns false if there is none.  An exception says why, except when
+// 'report' is false and the dates simply ran out (nothing is raised then).
+static bool NextAfter(time_t after, const char *cron, size_t cron_len,
+                      bool isc, zval *tz, zval *ret, time_t &when,
+                      bool report)
+{
+   // A C++ exception must never reach PHP; it would end the process
+   PhpZone zone(tz);
+   try
+   {
+      // A huge cron is only copied up to just past the longest one
+      // allowed; that is enough for it to be refused
+      size_t length = (cron_len > Date::T_CRON_LENGTH_MAX) ?
+                      Date::T_CRON_LENGTH_MAX + 1 : cron_len;
+      when = Date::CronAfter(after, std::string(cron, length), isc, zone);
+   }
+   catch (...)
+   {
+      if (!report && !EG(exception) && RanOut())
+         return false;
+
+      // A search that ran past the years a date can hold is a reference
+      // too far away, not a cron that never happens
+      if (zone.OutOfRange() && !EG(exception))
+         zend_argument_value_error(3,
+               "is outside of the supported time range");
+      else
+         ThrowCronError();
+      return false;
+   }
+
+   if (!AtMoment(when, tz, ret))
+   {
+      if (!EG(exception))
+         zend_throw_error(NULL, "The time found could not be shown as a date");
+      return false;
+   }
+   return true;
+}
+
 ZEND_FUNCTION(dateblock)
 {
    char *cron;
@@ -270,60 +366,21 @@ ZEND_FUNCTION(dateblock)
       Z_PARAM_BOOL(isc)
    ZEND_PARSE_PARAMETERS_END();
 
-   zval start;
-   if (!StartFrom(ref, &start))
+   // The cron is read in the timezone of the starting moment.  The result
+   // is built (in that same timezone) before sleeping, so a problem shows
+   // up right away instead of once the time arrives.
+   zval tz;
+   time_t after = 0;
+   time_t when = 0;
+   if (!Origin(ref, after, &tz))
    {
       RETURN_THROWS();
    }
-
-   // The cron is read in the timezone of the starting moment.  The moment
-   // itself is read straight from the date: PHP 8.0's getTimestamp() works
-   // it out again from the clock time, which picks the wrong one of the
-   // two 1:30s when the clocks go back.
-   zval tz;
-   time_t when = 0;
-   bool found = false;
-   timelib_time *at = Z_PHPDATE_P(&start)->time;
-   if (at != NULL && !YearFits(at->y))
-   {
-      zend_argument_value_error(3, "is outside of the supported time range");
-   }
-   else if (at != NULL && at->sse_uptodate &&
-            Call(&start, "getTimezone", &tz))
-   {
-      // A C++ exception must never reach PHP; it would end the process
-      PhpZone zone(&tz);
-      try
-      {
-         // A huge cron is only copied up to just past the longest one
-         // allowed; that is enough for it to be refused
-         size_t length = (cron_len > Date::T_CRON_LENGTH_MAX) ?
-                         Date::T_CRON_LENGTH_MAX + 1 : cron_len;
-         when = Date::CronAfter((time_t)at->sse, std::string(cron, length),
-                                isc != 0, zone);
-         found = true;
-      }
-      catch (...)
-      {
-         // A search that ran past the years a date can hold is a reference
-         // too far away, not a cron that never happens
-         if (zone.OutOfRange() && !EG(exception))
-            zend_argument_value_error(3,
-                  "is outside of the supported time range");
-         else
-            ThrowCronError();
-      }
-
-      // Build the result (in the same timezone) before sleeping, so a
-      // problem shows up right away instead of once the time arrives
-      found = found && AtMoment(when, &tz, return_value);
-      zval_ptr_dtor(&tz);
-   }
-   zval_ptr_dtor(&start);
+   bool found = NextAfter(after, cron, cron_len, isc != 0, &tz, return_value,
+                          when, true);
+   zval_ptr_dtor(&tz);
    if (!found)
    {
-      if (!EG(exception))
-         zend_throw_error(NULL, "The time found could not be shown as a date");
       RETURN_THROWS();
    }
 
@@ -334,6 +391,71 @@ ZEND_FUNCTION(dateblock)
       {
       }
    }
+}
+
+ZEND_FUNCTION(dateblock_upcoming)
+{
+   char *cron;
+   size_t cron_len;
+   zend_long count = Date::T_COUNT_DEFAULT;
+   zval *ref = NULL;
+   zend_bool isc = 0;
+
+   ZEND_PARSE_PARAMETERS_START(1, 4)
+      Z_PARAM_STRING(cron, cron_len)
+      Z_PARAM_OPTIONAL
+      Z_PARAM_LONG(count)
+      Z_PARAM_ZVAL(ref)
+      Z_PARAM_BOOL(isc)
+   ZEND_PARSE_PARAMETERS_END();
+
+   if (count < 1 || count > Date::T_COUNT_MAX)
+   {
+      zend_argument_value_error(2, "must be between 1 and %d",
+                                (int)Date::T_COUNT_MAX);
+      RETURN_THROWS();
+   }
+
+   zval tz;
+   time_t after = 0;
+   if (!Origin(ref, after, &tz))
+   {
+      RETURN_THROWS();
+   }
+
+   // The first one is found as dateblock() finds it (its errors are
+   // raised); each of the rest follows the one before it.  The list simply
+   // ends early once no later moment can be found or shown.
+   zval item;
+   time_t when = 0;
+   if (!NextAfter(after, cron, cron_len, isc != 0, &tz, &item, when, true))
+   {
+      zval_ptr_dtor(&tz);
+      RETURN_THROWS();
+   }
+   array_init(return_value);
+   add_next_index_zval(return_value, &item);
+   for (zend_long i = 1; i < count; i++)
+   {
+      after = when;
+      if (!NextAfter(after, cron, cron_len, isc != 0, &tz, &item, when,
+                     false))
+      {
+         break;
+      }
+      add_next_index_zval(return_value, &item);
+   }
+   zval_ptr_dtor(&tz);
+}
+
+PHP_MINIT_FUNCTION(dateblock)
+{
+   (void)type;
+   REGISTER_LONG_CONSTANT("DATEBLOCK_COUNT_DEFAULT", Date::T_COUNT_DEFAULT,
+                          CONST_PERSISTENT);
+   REGISTER_LONG_CONSTANT("DATEBLOCK_COUNT_MAX", Date::T_COUNT_MAX,
+                          CONST_PERSISTENT);
+   return SUCCESS;
 }
 
 PHP_RINIT_FUNCTION(dateblock)
@@ -367,7 +489,7 @@ zend_module_entry dateblock_module_entry = {
    dateblock_deps,
    "dateblock",
    ext_functions,
-   NULL,
+   PHP_MINIT(dateblock),
    NULL,
    PHP_RINIT(dateblock),
    NULL,

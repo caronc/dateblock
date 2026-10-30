@@ -138,20 +138,65 @@ static bool PyToDate(PyObject *obj, Date &out)
    return false;
 }
 
-// Returns a new (naive, local time) datetime object for 'date'
+// Returns a new (naive, local time) datetime object for 'date'.  When the
+// clocks go back, the second of the two identical clock times gets
+// fold=1 (as datetime.fromtimestamp() gives it), so its timestamp() is
+// still right.  Python is asked which one it is; if it can't say (ie: a
+// year Windows' clock functions don't cover), fold stays 0.  Any other
+// error (ie: out of memory) is raised.
 static PyObject *DateToPy(const Date &date)
 {
-   return PyDateTime_FromDateAndTime(date.Year(),
-                                     date.Month(),
-                                     date.DOM(),
-                                     date.Hour(),
-                                     date.Min(),
-                                     date.Sec(),
-                                     0);
+   int fold = 0;
+   PyObject *args = Py_BuildValue("(L)", (long long)date.Time());
+   PyObject *local = args ? PyDateTime_FromTimestamp(args) : NULL;
+   Py_XDECREF(args);
+   if (local == NULL)
+   {
+      if (!PyErr_ExceptionMatches(PyExc_OverflowError) &&
+          !PyErr_ExceptionMatches(PyExc_ValueError) &&
+          !PyErr_ExceptionMatches(PyExc_OSError))
+      {
+         return NULL;
+      }
+      PyErr_Clear();
+   }
+   else
+   {
+      if (PyDateTime_Check(local) &&
+          PyDateTime_GET_YEAR(local) == date.Year() &&
+          PyDateTime_GET_MONTH(local) == date.Month() &&
+          PyDateTime_GET_DAY(local) == date.DOM() &&
+          PyDateTime_DATE_GET_HOUR(local) == date.Hour() &&
+          PyDateTime_DATE_GET_MINUTE(local) == date.Min() &&
+          PyDateTime_DATE_GET_SECOND(local) == date.Sec())
+      {
+         fold = PyDateTime_DATE_GET_FOLD(local);
+      }
+      Py_DECREF(local);
+   }
+   return PyDateTime_FromDateAndTimeAndFold(date.Year(),
+                                            date.Month(),
+                                            date.DOM(),
+                                            date.Hour(),
+                                            date.Min(),
+                                            date.Sec(),
+                                            0, fold);
 }
 
 // 1970-01-01 00:00:00 UTC (set up when the module loads)
 static PyObject *g_epoch = NULL;
+
+// True if 't' (seconds since the epoch) is so close to the first or last
+// moment a datetime can hold (years 1 and 9999), or past it, that its local
+// time may not fit.  A timezone's offset is always under 24 hours, so only
+// the last (or first) day can be affected.
+static bool PastEdge(time_t t)
+{
+   const long long first = -62135596800LL;  // 0001-01-01 00:00:00 UTC
+   const long long last = 253402300799LL;   // 9999-12-31 23:59:59 UTC
+   const long long margin = 86400;
+   return (long long) t < first + margin || (long long) t > last - margin;
+}
 
 // The moment 't' (seconds since the epoch) as an aware datetime in
 // 'tzinfo', like datetime.fromtimestamp(t, tzinfo).  It is worked out as
@@ -210,7 +255,11 @@ static PyObject *FromTimestamp(time_t t, PyObject *tzinfo)
 class PyZone : public Date::TimeZone
 {
    public:
-     PyZone(PyObject *tzinfo) : m_tzinfo(tzinfo) {}
+     PyZone(PyObject *tzinfo) : m_tzinfo(tzinfo), m_pastEdge(false) {}
+
+     // True once a moment failed because it is too close to the limits of
+     // a datetime (see PastEdge); the search then gives up
+     bool PastEdge() const { return m_pastEdge; }
 
      bool ToLocal(time_t t, struct tm& tmOut) const
      {
@@ -222,6 +271,7 @@ class PyZone : public Date::TimeZone
         PyObject *dt = FromTimestamp(t, m_tzinfo);
         if (dt == NULL)
         {
+           m_pastEdge = ::PastEdge(t);
            return false;
         }
         tmOut.tm_year = PyDateTime_GET_YEAR(dt) - 1900;
@@ -236,6 +286,7 @@ class PyZone : public Date::TimeZone
 
    private:
      PyObject *m_tzinfo;
+     mutable bool m_pastEdge;
 };
 
 // Turns the C++ exception being handled into a Python one.  Call it from
@@ -309,37 +360,45 @@ static PyObject *CronLocal(const char *cron, size_t length, bool isc,
    }
 }
 
-// The next match for a timezone aware datetime, read in its own timezone.
-// Returns an aware datetime (with the same tzinfo) and sets 'when', or
-// NULL with an error set.
-static PyObject *CronInZone(const char *cron, size_t length, bool isc,
-                            PyObject *ref, PyObject *tzinfo, time_t &when)
+// The moment a timezone aware datetime stands for, in seconds since the
+// epoch.  Returns false with an error set on failure.
+static bool AwareEpoch(PyObject *ref, time_t &epoch)
 {
    PyObject *ts = PyObject_CallMethod(ref, "timestamp", NULL);
    if (ts == NULL)
    {
-      return NULL;
+      return false;
    }
    // timestamp() can be anything a datetime subclass makes it return
    double seconds = PyFloat_AsDouble(ts);
    Py_DECREF(ts);
-   time_t epoch;
-   if (PyErr_Occurred() || !EpochToTime(seconds, epoch))
-   {
-      return NULL;
-   }
+   return !PyErr_Occurred() && EpochToTime(seconds, epoch);
+}
 
+// The next match after 'epoch', read in 'tzinfo'.  Returns an aware
+// datetime (with that tzinfo) and sets 'when', or NULL with an error set.
+// 'pastEdge' (if given) is then set when it failed because the moments got
+// too close to the limits of a datetime.
+static PyObject *CronInZone(const char *cron, size_t length, bool isc,
+                            time_t epoch, PyObject *tzinfo, time_t &when,
+                            bool *pastEdge = NULL)
+{
+   PyZone zone(tzinfo);
    try
    {
-      PyZone zone(tzinfo);
       when = Date::CronAfter(epoch, std::string(cron, length), isc, zone);
    }
    catch (...)
    {
       SetCronError();
+      if (pastEdge != NULL)
+         *pastEdge = zone.PastEdge();
       return NULL;
    }
-   return FromTimestamp(when, tzinfo);
+   PyObject *result = FromTimestamp(when, tzinfo);
+   if (result == NULL && pastEdge != NULL)
+      *pastEdge = PastEdge(when);
+   return result;
 }
 
 // For a timezone aware datetime or time, returns a new reference to the
@@ -419,54 +478,85 @@ PyDoc_STRVAR(dateblock_doc,
 "in that same timezone.  Anything else uses this computer's timezone and\n"
 "returns a naive datetime.  Either way it unblocks at that exact moment.");
 
-// Works out the next match of 'cron' (a str) after 'ref' (or now).
-// Returns the datetime to give back and sets 'when' to that moment, or
-// returns NULL with an error set.
-static PyObject *NextMatch(PyObject *cron, PyObject *ref, bool isc,
-                           time_t &when)
+// The cron string (a str) as the engine reads it.  Only its start is
+// turned into UTF-8 (just past the longest one allowed); that is enough
+// for a huge one to be refused, without first building a UTF-8 copy of
+// all of it.  Returns a new reference that owns '*text' (release it once
+// done), or NULL with an error set.
+static PyObject *CronText(PyObject *cron, const char **text, size_t *length)
 {
-   // Only the start of a huge cron is turned into UTF-8 (just past the
-   // longest one allowed); that is enough for it to be refused, without
-   // first building a UTF-8 copy of all of it
    PyObject *head = PyUnicode_Substring(cron, 0, Date::T_CRON_LENGTH_MAX + 1);
    if (head == NULL)
    {
       return NULL;
    }
    Py_ssize_t size = 0;
-   const char *str = PyUnicode_AsUTF8AndSize(head, &size);
-   if (str == NULL)
+   *text = PyUnicode_AsUTF8AndSize(head, &size);
+   if (*text == NULL)
    {
       Py_DECREF(head);
       return NULL;
    }
-   if (memchr(str, '\0', size) != NULL)
+   if (memchr(*text, '\0', size) != NULL)
    {
       Py_DECREF(head);
       PyErr_SetString(PyExc_ValueError, "embedded null character");
       return NULL;
    }
-   size_t length = static_cast<size_t>(size);
+   *length = static_cast<size_t>(size);
+   return head;
+}
 
+// The first match of 'cron' after 'ref' (or now).  'ref' sets the
+// timezone (see AwareRef()); 'zone' gets a new reference to the tzinfo
+// used, or NULL for the computer's own.  Returns the datetime and sets
+// 'when' to that moment, or returns NULL with an error set.
+static PyObject *FirstMatch(const char *str, size_t length, bool isc,
+                            PyObject *ref, PyObject **zone, time_t &when)
+{
    PyObject *tzinfo = NULL;
    PyObject *start = AwareRef(ref, &tzinfo);
    if (start == NULL && PyErr_Occurred())
    {
-      Py_DECREF(head);
       return NULL;
    }
 
-   PyObject *result;
-   if (tzinfo != NULL)
-   {
-      result = CronInZone(str, length, isc, start, tzinfo, when);
-   }
-   else
+   PyObject *result = NULL;
+   time_t epoch;
+   if (tzinfo == NULL)
    {
       result = CronLocal(str, length, isc, start ? start : ref, when);
    }
-   Py_DECREF(head);
+   else if (AwareEpoch(start, epoch))
+   {
+      result = CronInZone(str, length, isc, epoch, tzinfo, when);
+   }
    Py_XDECREF(start);
+   if (result == NULL)
+   {
+      Py_XDECREF(tzinfo);
+      return NULL;
+   }
+   *zone = tzinfo;
+   return result;
+}
+
+// Works out the next match of 'cron' (a str) after 'ref' (or now).
+// Returns the datetime to give back and sets 'when' to that moment, or
+// returns NULL with an error set.
+static PyObject *NextMatch(PyObject *cron, PyObject *ref, bool isc,
+                           time_t &when)
+{
+   const char *str = NULL;
+   size_t length = 0;
+   PyObject *head = CronText(cron, &str, &length);
+   if (head == NULL)
+   {
+      return NULL;
+   }
+   PyObject *tzinfo = NULL;
+   PyObject *result = FirstMatch(str, length, isc, ref, &tzinfo, when);
+   Py_DECREF(head);
    Py_XDECREF(tzinfo);
    return result;
 }
@@ -555,11 +645,166 @@ static PyObject *next_match(PyObject *self, PyObject *args, PyObject *kwds)
    return Py_BuildValue("(NL)", result, static_cast<long long>(when));
 }
 
+PyDoc_STRVAR(upcoming_doc,
+"upcoming(cron, count=COUNT_DEFAULT, ref=None, isc=False)\n"
+"--\n\n"
+"The next few moments that match a cron string, without waiting.\n\n"
+"- cron:  a dateblock cron string, or a regular crontab string when\n"
+"         isc=True.\n"
+"- count: how many to return (1 to COUNT_MAX; just the next one\n"
+"         unless given).\n"
+"- ref:   start from this datetime, date, time, timedelta or epoch\n"
+"         value instead of now.\n"
+"- isc:   treat the cron string as a regular 5 field crontab entry.\n\n"
+"Returns a tuple of datetimes, earliest first, the same kind\n"
+"dateblock() returns (aware in ref's own timezone, otherwise naive).\n"
+"The tuple is shorter than count when no later moment can be shown\n"
+"(ie: past the year 9999).  Errors are the same as dateblock()'s, and\n"
+"a count out of range raises ValueError.  One exception: on the very\n"
+"last day of the year 9999 (or first of the year 1), an error from a\n"
+"custom tzinfo can't be told apart from running out of dates, so it\n"
+"just ends the tuple.");
+
+// True if the error just raised means the list has simply run out: the
+// next moment is too far away to be shown (ie: past the year 9999), or no
+// later moment matches.
+//  - In local time no code but Python's own runs, so its range errors
+//    (ValueError, OverflowError) are enough to tell.
+//  - In a timezone, the tzinfo's own code runs too and may raise either
+//    one, so the search must also have reached a datetime's limits.  In
+//    that last day a broken tzinfo's error looks the same as running out,
+//    so it ends the list too.
+static bool ListEnds(bool inZone, bool pastEdge)
+{
+   if (inZone && !pastEdge)
+   {
+      return false;
+   }
+   return PyErr_ExceptionMatches(PyExc_OverflowError) ||
+          PyErr_ExceptionMatches(PyExc_ValueError);
+}
+
+// The next 'count' matches, as a tuple (see upcoming_doc)
+static PyObject *upcoming(PyObject *self, PyObject *args, PyObject *kwds)
+{
+   PyObject *cron = NULL;
+   PyObject *pCount = NULL;
+   PyObject *pDateObj = NULL;
+   int isc = 0;
+
+   static const char *kwlist[] = {"cron", "count", "ref", "isc", NULL};
+
+   if (!PyArg_ParseTupleAndKeywords(args, kwds, "U|OOp",
+            const_cast<char **>(kwlist), &cron, &pCount, &pDateObj, &isc))
+   {
+      return NULL;
+   }
+
+   // Any whole number is accepted here, so even a huge one gets the same
+   // ValueError as any other count out of range
+   long count = Date::T_COUNT_DEFAULT;
+   if (pCount != NULL)
+   {
+      PyObject *number = PyNumber_Index(pCount);
+      if (number == NULL)
+      {
+         return NULL;
+      }
+      int overflow = 0;
+      count = PyLong_AsLongAndOverflow(number, &overflow);
+      if (count == -1 && PyErr_Occurred())
+      {
+         Py_DECREF(number);
+         return NULL;
+      }
+      Py_DECREF(number);
+      if (overflow)
+      {
+         // Too big to be worth showing
+         PyErr_Format(PyExc_ValueError, "count must be from 1 to %d",
+                      (int)Date::T_COUNT_MAX);
+         return NULL;
+      }
+      if (count < 1 || count > Date::T_COUNT_MAX)
+      {
+         PyErr_Format(PyExc_ValueError, "count must be from 1 to %d (not %ld)",
+                      (int)Date::T_COUNT_MAX, count);
+         return NULL;
+      }
+   }
+
+   const char *str = NULL;
+   size_t length = 0;
+   PyObject *head = CronText(cron, &str, &length);
+   if (head == NULL)
+   {
+      return NULL;
+   }
+
+   // The first one is found as dateblock() finds it; its errors are raised
+   PyObject *tzinfo = NULL;
+   time_t when = 0;
+   PyObject *item = FirstMatch(str, length, isc != 0, pDateObj, &tzinfo,
+                               when);
+   PyObject *found = item ? PyList_New(0) : NULL;
+   if (found != NULL && PyList_Append(found, item) < 0)
+   {
+      Py_CLEAR(found);
+   }
+   Py_XDECREF(item);
+
+   // Each of the rest follows the moment before it (in seconds, so the
+   // two copies of a repeated hour stay apart), in the same timezone
+   while (found != NULL && PyList_GET_SIZE(found) < count)
+   {
+      time_t next = 0;
+      bool pastEdge = false;
+      if (tzinfo != NULL)
+      {
+         item = CronInZone(str, length, isc != 0, when, tzinfo, next,
+                           &pastEdge);
+      }
+      else
+      {
+         PyObject *at = PyLong_FromLongLong((long long)when);
+         item = at ? CronLocal(str, length, isc != 0, at, next) : NULL;
+         Py_XDECREF(at);
+      }
+      if (item == NULL)
+      {
+         if (ListEnds(tzinfo != NULL, pastEdge))
+         {
+            PyErr_Clear();
+            break;
+         }
+         Py_CLEAR(found);
+         break;
+      }
+      if (PyList_Append(found, item) < 0)
+      {
+         Py_CLEAR(found);
+      }
+      Py_DECREF(item);
+      when = next;
+   }
+   Py_DECREF(head);
+   Py_XDECREF(tzinfo);
+   if (found == NULL)
+   {
+      return NULL;
+   }
+   PyObject *result = PyList_AsTuple(found);
+   Py_DECREF(found);
+   return result;
+}
+
 // Python Method Table.
 static PyMethodDef DateblockMethods[] =
 {
     {"dateblock", (PyCFunction)(void (*)(void))dateblock,
                   METH_VARARGS | METH_KEYWORDS, dateblock_doc},
+    {"upcoming", (PyCFunction)(void (*)(void))upcoming,
+                 METH_VARARGS | METH_KEYWORDS, upcoming_doc},
     {"_next", (PyCFunction)(void (*)(void))next_match,
               METH_VARARGS | METH_KEYWORDS,
               "_next(cron, ref=None, isc=False) -> (datetime, epoch)"},
@@ -617,7 +862,9 @@ PyMODINIT_FUNC PyInit__dateblock(void)
        PyModule_AddIntConstant(m, "DOW_MIN", Date::T_DOW_MIN) < 0 ||
        PyModule_AddIntConstant(m, "DOW_MAX", Date::T_DOW_MAX) < 0 ||
        PyModule_AddIntConstant(m, "DRIFT_MIN", Date::T_DRIFT_MIN) < 0 ||
-       PyModule_AddIntConstant(m, "DRIFT_MAX", Date::T_DRIFT_MAX) < 0)
+       PyModule_AddIntConstant(m, "DRIFT_MAX", Date::T_DRIFT_MAX) < 0 ||
+       PyModule_AddIntConstant(m, "COUNT_DEFAULT", Date::T_COUNT_DEFAULT) < 0 ||
+       PyModule_AddIntConstant(m, "COUNT_MAX", Date::T_COUNT_MAX) < 0)
    {
       Py_DECREF(epoch);
       Py_DECREF(m);

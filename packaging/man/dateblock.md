@@ -3,8 +3,8 @@ dateblock(1) -- block (sleep) until a cron-style moment in time
 
 ## SYNOPSIS
 
-`dateblock` [`-t`] [`-v`] [`-z` <ZONE>] `-c` <CRON> [`-i`] [[`--`] <COMMAND> [<ARGUMENTS>...]]<br>
-`dateblock` [`-t`] [`-v`] [`-z` <ZONE>] [`-s` <SEC>] [`-n` <MIN>] [`-o` <HOUR>] [`-d` <DOM>] [`-m` <MONTH>] [`-w` <DOW>] [`-x` <DRIFT>] [[`--`] <COMMAND> [<ARGUMENTS>...]]<br>
+`dateblock` [`-t`] [`-v`] [`-C` <COUNT>] [`-z` <ZONE>] `-c` <CRON> [`-i`] [[`--`] <COMMAND> [<ARGUMENTS>...]]<br>
+`dateblock` [`-t`] [`-v`] [`-C` <COUNT>] [`-z` <ZONE>] [`-s` <SEC>] [`-n` <MIN>] [`-o` <HOUR>] [`-d` <DOM>] [`-m` <MONTH>] [`-w` <DOW>] [`-x` <DRIFT>] [[`--`] <COMMAND> [<ARGUMENTS>...]]<br>
 `dateblock` `-h`
 
 ## DESCRIPTION
@@ -20,7 +20,8 @@ On top of the regular cron fields, **dateblock** can also:
   * match on a specific _second_ (not just a minute).
   * _drift_; wait an extra number of seconds after the time is matched.
 
-Use `--test` to see when **dateblock** would unblock without waiting.
+Use `--test` to see when **dateblock** would unblock without waiting, or
+`--count` to list the next few times.
 
 Given a <COMMAND>, **dateblock** runs it once the time is reached and exits
 with the command's exit code; see [RUNNING A COMMAND][].
@@ -37,6 +38,14 @@ with the command's exit code; see [RUNNING A COMMAND][].
   `-v`, `--verbose`:
   Print the current time and the time **dateblock** will unblock at before
   blocking, and the time it actually unblocked at afterwards.
+
+  `-C`, `--count=`<COUNT>:
+  Do not block; print the current time and the next <COUNT> times (1 to
+  1000) the schedule matches, then exit. The first is the time
+  **dateblock** would unblock at. A <COMMAND> is shown but not run. In the
+  rare case that no later time exists (ie: past the last date the computer
+  can show), the list ends early with a note on standard error, and the
+  exit status is still `0`.
 
   `-c`, `--cron=`<CRON>:
   The full schedule as a single cron string; see [CRON STRING][]. When this
@@ -266,6 +275,16 @@ See when a schedule would next run, without waiting:
     Current Time : 2026-10-24 13:05:00 (Sat)
     Block Until  : 2026-10-25 02:30:00 (Sun)
 
+List the next 5 times a crontab entry runs (a quick way to check one):
+
+    $ dateblock -C 5 -i -c "0 9 * * Mon-Fri"
+    Current Time : 2026-10-30 16:53:37 (Fri)
+    Next Times   : 2026-11-02 09:00:00 (Mon)
+                   2026-11-03 09:00:00 (Tue)
+                   2026-11-04 09:00:00 (Wed)
+                   2026-11-05 09:00:00 (Thu)
+                   2026-11-06 09:00:00 (Fri)
+
 Run a backup at the next quarter hour; the exit code is the backup's:
 
     $ dateblock -n /15 -- ./backup.sh --full
@@ -280,10 +299,11 @@ With a <COMMAND>, **dateblock** exits with the command's own exit code
 once it has run. Otherwise, or if the command never got to run:
 
   * `0`:
-    The matching time was reached (or, with `--test`, was worked out).
+    The matching time was reached (or, with `--test` or `--count`, was
+    worked out).
   * `1`:
     No options were given, the schedule is not valid, the `--timezone` is
-    unknown, or no matching time exists (such as the 31st of February). A
+    unknown, the `--count` is not a whole number from 1 to 1000, or no matching time exists (such as the 31st of February). A
     schedule counts as impossible when nothing matches within the next 400
     years, the length of time it takes the calendar to repeat itself.
   * `126`:

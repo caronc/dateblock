@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { dateblock, next } = require('..');
+const { dateblock, next, upcoming, COUNT_DEFAULT, COUNT_MAX } = require('..');
 
 // 2026-01-01 00:00:00 UTC
 const REF = Date.UTC(2026, 0, 1);
@@ -128,6 +128,70 @@ test('the edge of the dates JavaScript can hold', () => {
   assert.strictEqual(next('/1', { ref: -8.64e15, timeZone: 'UTC' }).getTime(), -8.64e15 + 1000);
 });
 
+test('upcoming() lists the next few times', () => {
+  const list = (cron, options = {}) =>
+    upcoming(cron, { ref: REF, timeZone: 'UTC', ...options }).map((d) => d.toISOString());
+  // 2026-01-01 is a Thursday
+  assert.deepStrictEqual(list('0 9 * * Mon-Fri', { isc: true, count: 5 }), [
+    '2026-01-01T09:00:00.000Z', '2026-01-02T09:00:00.000Z', '2026-01-05T09:00:00.000Z',
+    '2026-01-06T09:00:00.000Z', '2026-01-07T09:00:00.000Z',
+  ]);
+  assert.strictEqual(COUNT_DEFAULT, 1);
+  assert.strictEqual(COUNT_MAX, 1000);
+  // Unless told otherwise, just the one next() works out
+  assert.deepStrictEqual(upcoming('@daily', { ref: REF }), [next('@daily', { ref: REF })]);
+  assert.strictEqual(upcoming('/1', { count: COUNT_MAX }).length, COUNT_MAX);
+
+  // Each one is what next() gives from the one before it
+  let at = REF;
+  for (const when of upcoming('*/20 5 1-3 * * * +7', { ref: REF, count: 6 })) {
+    assert.strictEqual(when.getTime(), next('*/20 5 1-3 * * * +7', { ref: at }).getTime());
+    at = when;
+  }
+});
+
+test('upcoming() keeps both copies of a repeated hour', () => {
+  // New York, 2025-11-02: the clocks go back, so 01:30 happens twice
+  const times = upcoming('0 30 1', {
+    ref: Date.UTC(2025, 10, 1, 16), timeZone: 'America/New_York', count: 3,
+  });
+  assert.deepStrictEqual(times.map((d) => d.toISOString()), [
+    '2025-11-02T05:30:00.000Z', '2025-11-02T06:30:00.000Z', '2025-11-03T06:30:00.000Z',
+  ]);
+});
+
+test('upcoming() ends early at the edge of the dates JavaScript can hold', () => {
+  const times = upcoming('@yearly', { ref: 8.64e15 - 20 * 366 * 86400000, timeZone: 'UTC', count: 1000 });
+  assert.ok(times.length > 0 && times.length < 1000);
+  assert.strictEqual(times[times.length - 1].toISOString(), '+275760-01-01T00:00:00.000Z');
+});
+
+test('upcoming() reads each option once', () => {
+  const reads = {};
+  const options = {};
+  const values = { ref: Date.UTC(2026, 0, 1), isc: false, timeZone: 'UTC', count: 3 };
+  for (const [name, value] of Object.entries(values)) {
+    Object.defineProperty(options, name, {
+      enumerable: true,
+      get() {
+        reads[name] = (reads[name] || 0) + 1;
+        return value;
+      },
+    });
+  }
+  assert.equal(upcoming('@daily', options).length, 3);
+  assert.deepEqual(reads, { ref: 1, isc: 1, timeZone: 1, count: 1 });
+});
+
+test('upcoming() refuses a bad count, and reports the first time as next() does', () => {
+  for (const count of [0, 1001, 1.5, -1, NaN, Infinity]) {
+    assert.throws(() => upcoming('* 5', { count }), RangeError);
+  }
+  assert.throws(() => upcoming('* 5', { count: '5' }), TypeError);
+  assert.throws(() => upcoming('* 99'), SyntaxError);
+  assert.throws(() => upcoming('0 0 0 31 2 *'), RangeError);
+});
+
 test('dateblock() waits until the moment arrives', async () => {
   const started = Date.now();
   const when = await dateblock('/1');
@@ -172,6 +236,8 @@ test('ES module import works too', async () => {
   const esm = await import('../index.mjs');
   assert.strictEqual(esm.next, next);
   assert.strictEqual(esm.dateblock, dateblock);
+  assert.strictEqual(esm.upcoming, upcoming);
+  assert.strictEqual(esm.COUNT_MAX, COUNT_MAX);
 });
 
 test('the version matches the rest of dateblock', () => {

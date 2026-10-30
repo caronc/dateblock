@@ -4,9 +4,9 @@
 .SH "NAME"
 \fBdateblock\fR \- block (sleep) until a cron\-style moment in time
 .SH "SYNOPSIS"
-\fBdateblock\fR [\fB\-t\fR] [\fB\-v\fR] [\fB\-z\fR \fIZONE\fR] \fB\-c\fR \fICRON\fR [\fB\-i\fR] [[\fB\-\-\fR] \fICOMMAND\fR [\fIARGUMENTS\fR\|\.\|\.\|\.]]
+\fBdateblock\fR [\fB\-t\fR] [\fB\-v\fR] [\fB\-C\fR \fICOUNT\fR] [\fB\-z\fR \fIZONE\fR] \fB\-c\fR \fICRON\fR [\fB\-i\fR] [[\fB\-\-\fR] \fICOMMAND\fR [\fIARGUMENTS\fR\|\.\|\.\|\.]]
 .br
-\fBdateblock\fR [\fB\-t\fR] [\fB\-v\fR] [\fB\-z\fR \fIZONE\fR] [\fB\-s\fR \fISEC\fR] [\fB\-n\fR \fIMIN\fR] [\fB\-o\fR \fIHOUR\fR] [\fB\-d\fR \fIDOM\fR] [\fB\-m\fR \fIMONTH\fR] [\fB\-w\fR \fIDOW\fR] [\fB\-x\fR \fIDRIFT\fR] [[\fB\-\-\fR] \fICOMMAND\fR [\fIARGUMENTS\fR\|\.\|\.\|\.]]
+\fBdateblock\fR [\fB\-t\fR] [\fB\-v\fR] [\fB\-C\fR \fICOUNT\fR] [\fB\-z\fR \fIZONE\fR] [\fB\-s\fR \fISEC\fR] [\fB\-n\fR \fIMIN\fR] [\fB\-o\fR \fIHOUR\fR] [\fB\-d\fR \fIDOM\fR] [\fB\-m\fR \fIMONTH\fR] [\fB\-w\fR \fIDOW\fR] [\fB\-x\fR \fIDRIFT\fR] [[\fB\-\-\fR] \fICOMMAND\fR [\fIARGUMENTS\fR\|\.\|\.\|\.]]
 .br
 \fBdateblock\fR \fB\-h\fR
 .SH "DESCRIPTION"
@@ -19,7 +19,7 @@ match on a specific \fIsecond\fR (not just a minute)\.
 \fIdrift\fR; wait an extra number of seconds after the time is matched\.
 .IP "" 0
 .P
-Use \fB\-\-test\fR to see when \fBdateblock\fR would unblock without waiting\.
+Use \fB\-\-test\fR to see when \fBdateblock\fR would unblock without waiting, or \fB\-\-count\fR to list the next few times\.
 .P
 Given a \fICOMMAND\fR, \fBdateblock\fR runs it once the time is reached and exits with the command's exit code; see \fIRUNNING A COMMAND\fR\.
 .SH "OPTIONS"
@@ -28,6 +28,8 @@ Given a \fICOMMAND\fR, \fBdateblock\fR runs it once the time is reached and exit
 \fB\-t\fR, \fB\-\-test\fR: Do not block; print the current time and the time \fBdateblock\fR would unblock at, then exit\.
 .P
 \fB\-v\fR, \fB\-\-verbose\fR: Print the current time and the time \fBdateblock\fR will unblock at before blocking, and the time it actually unblocked at afterwards\.
+.P
+\fB\-C\fR, \fB\-\-count=\fR\fICOUNT\fR: Do not block; print the current time and the next \fICOUNT\fR times (1 to 1000) the schedule matches, then exit\. The first is the time \fBdateblock\fR would unblock at\. A \fICOMMAND\fR is shown but not run\. In the rare case that no later time exists (ie: past the last date the computer can show), the list ends early with a note on standard error, and the exit status is still \fB0\fR\.
 .P
 \fB\-c\fR, \fB\-\-cron=\fR\fICRON\fR: The full schedule as a single cron string; see \fICRON STRING\fR\. When this is used the individual field options below are ignored\.
 .P
@@ -242,6 +244,19 @@ Block Until  : 2026\-10\-25 02:30:00 (Sun)
 .fi
 .IP "" 0
 .P
+List the next 5 times a crontab entry runs (a quick way to check one):
+.IP "" 4
+.nf
+$ dateblock \-C 5 \-i \-c "0 9 * * Mon\-Fri"
+Current Time : 2026\-10\-30 16:53:37 (Fri)
+Next Times   : 2026\-11\-02 09:00:00 (Mon)
+               2026\-11\-03 09:00:00 (Tue)
+               2026\-11\-04 09:00:00 (Wed)
+               2026\-11\-05 09:00:00 (Thu)
+               2026\-11\-06 09:00:00 (Fri)
+.fi
+.IP "" 0
+.P
 Run a backup at the next quarter hour; the exit code is the backup's:
 .IP "" 4
 .nf
@@ -259,10 +274,10 @@ $ while dateblock \-n /15; do \./backup\.sh; done
 With a \fICOMMAND\fR, \fBdateblock\fR exits with the command's own exit code once it has run\. Otherwise, or if the command never got to run:
 .TP
 \fB0\fR
-The matching time was reached (or, with \fB\-\-test\fR, was worked out)\.
+The matching time was reached (or, with \fB\-\-test\fR or \fB\-\-count\fR, was worked out)\.
 .TP
 \fB1\fR
-No options were given, the schedule is not valid, the \fB\-\-timezone\fR is unknown, or no matching time exists (such as the 31st of February)\. A schedule counts as impossible when nothing matches within the next 400 years, the length of time it takes the calendar to repeat itself\.
+No options were given, the schedule is not valid, the \fB\-\-timezone\fR is unknown, the \fB\-\-count\fR is not a whole number from 1 to 1000, or no matching time exists (such as the 31st of February)\. A schedule counts as impossible when nothing matches within the next 400 years, the length of time it takes the calendar to repeat itself\.
 .TP
 \fB126\fR
 The \fICOMMAND\fR was found but could not be run (ie: it is not executable)\.

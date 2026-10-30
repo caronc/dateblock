@@ -22,10 +22,11 @@ Block (sleep) until a cron-style moment in time.
     >>> dateblock("0 */5")                 # wait for it
 
 With asyncio, ``await dateblock.wait("0 */5")`` waits without blocking
-other tasks.
+other tasks.  ``dateblock.upcoming("0 */5", 3)`` lists the next 3 times
+(without waiting).
 
-Run ``help(dateblock)`` and ``help(dateblock.wait)`` for all of the
-options.
+Run ``help(dateblock)``, ``help(dateblock.wait)`` and
+``help(dateblock.upcoming)`` for all of the options.
 """
 
 # The package details.
@@ -40,6 +41,8 @@ __status__ = "Production"
 
 from ._dateblock import (  # noqa: E402,F401
     dateblock,
+    upcoming,
+    COUNT_DEFAULT, COUNT_MAX,
     SEC_MIN, SEC_MAX,
     MIN_MIN, MIN_MAX,
     HOUR_MIN, HOUR_MAX,

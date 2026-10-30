@@ -66,6 +66,13 @@ class Date
      // to the compiled library.)
      static const std::size_t T_CRON_LENGTH_MAX = 65536;
 
+     // How many upcoming times the command line tool (--count) and the
+     // bindings list: just the next one unless told otherwise, and never
+     // more than 1000.  (Set here, so they add nothing to the compiled
+     // library.)
+     static const int T_COUNT_DEFAULT = 1;
+     static const int T_COUNT_MAX = 1000;
+
      // ISC Cron Fields (5 of them)
      static const int ISC_CRON_FIELD_COUNT;
 

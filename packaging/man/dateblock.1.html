@@ -85,8 +85,8 @@
 </p>
 <h2 id="SYNOPSIS">SYNOPSIS</h2>
 
-<p><code>dateblock</code> [<code>-t</code>] [<code>-v</code>] [<code>-z</code> <var>ZONE</var>] <code>-c</code> <var>CRON</var> [<code>-i</code>] [[<code>--</code>] <var>COMMAND</var> [<var>ARGUMENTS</var>...]]<br>
-<code>dateblock</code> [<code>-t</code>] [<code>-v</code>] [<code>-z</code> <var>ZONE</var>] [<code>-s</code> <var>SEC</var>] [<code>-n</code> <var>MIN</var>] [<code>-o</code> <var>HOUR</var>] [<code>-d</code> <var>DOM</var>] [<code>-m</code> <var>MONTH</var>] [<code>-w</code> <var>DOW</var>] [<code>-x</code> <var>DRIFT</var>] [[<code>--</code>] <var>COMMAND</var> [<var>ARGUMENTS</var>...]]<br>
+<p><code>dateblock</code> [<code>-t</code>] [<code>-v</code>] [<code>-C</code> <var>COUNT</var>] [<code>-z</code> <var>ZONE</var>] <code>-c</code> <var>CRON</var> [<code>-i</code>] [[<code>--</code>] <var>COMMAND</var> [<var>ARGUMENTS</var>...]]<br>
+<code>dateblock</code> [<code>-t</code>] [<code>-v</code>] [<code>-C</code> <var>COUNT</var>] [<code>-z</code> <var>ZONE</var>] [<code>-s</code> <var>SEC</var>] [<code>-n</code> <var>MIN</var>] [<code>-o</code> <var>HOUR</var>] [<code>-d</code> <var>DOM</var>] [<code>-m</code> <var>MONTH</var>] [<code>-w</code> <var>DOW</var>] [<code>-x</code> <var>DRIFT</var>] [[<code>--</code>] <var>COMMAND</var> [<var>ARGUMENTS</var>...]]<br>
 <code>dateblock</code> <code>-h</code></p>
 
 <h2 id="DESCRIPTION">DESCRIPTION</h2>
@@ -105,7 +105,8 @@ foreground: it returns the moment the schedule is next matched.</p>
 <em>drift</em>; wait an extra number of seconds after the time is matched.</li>
 </ul>
 
-<p>Use <code>--test</code> to see when <strong>dateblock</strong> would unblock without waiting.</p>
+<p>Use <code>--test</code> to see when <strong>dateblock</strong> would unblock without waiting, or
+<code>--count</code> to list the next few times.</p>
 
 <p>Given a <var>COMMAND</var>, <strong>dateblock</strong> runs it once the time is reached and exits
 with the command's exit code; see <a href="#RUNNING-A-COMMAND" title="RUNNING A COMMAND" data-bare-link="true">RUNNING A COMMAND</a>.</p>
@@ -122,6 +123,14 @@ with the command's exit code; see <a href="#RUNNING-A-COMMAND" title="RUNNING A 
 <p><code>-v</code>, <code>--verbose</code>:
   Print the current time and the time <strong>dateblock</strong> will unblock at before
   blocking, and the time it actually unblocked at afterwards.</p>
+
+<p><code>-C</code>, <code>--count=</code><var>COUNT</var>:
+  Do not block; print the current time and the next <var>COUNT</var> times (1 to
+  1000) the schedule matches, then exit. The first is the time
+  <strong>dateblock</strong> would unblock at. A <var>COMMAND</var> is shown but not run. In the
+  rare case that no later time exists (ie: past the last date the computer
+  can show), the list ends early with a note on standard error, and the
+  exit status is still <code>0</code>.</p>
 
 <p><code>-c</code>, <code>--cron=</code><var>CRON</var>:
   The full schedule as a single cron string; see <a href="#CRON-STRING" title="CRON STRING" data-bare-link="true">CRON STRING</a>. When this
@@ -385,6 +394,17 @@ Current Time : 2026-10-24 13:05:00 (Sat)
 Block Until  : 2026-10-25 02:30:00 (Sun)
 </code></pre>
 
+<p>List the next 5 times a crontab entry runs (a quick way to check one):</p>
+
+<pre><code>$ dateblock -C 5 -i -c "0 9 * * Mon-Fri"
+Current Time : 2026-10-30 16:53:37 (Fri)
+Next Times   : 2026-11-02 09:00:00 (Mon)
+               2026-11-03 09:00:00 (Tue)
+               2026-11-04 09:00:00 (Wed)
+               2026-11-05 09:00:00 (Thu)
+               2026-11-06 09:00:00 (Fri)
+</code></pre>
+
 <p>Run a backup at the next quarter hour; the exit code is the backup's:</p>
 
 <pre><code>$ dateblock -n /15 -- ./backup.sh --full
@@ -402,10 +422,11 @@ once it has run. Otherwise, or if the command never got to run:</p>
 
 <dl>
 <dt><code>0</code></dt>
-<dd>The matching time was reached (or, with <code>--test</code>, was worked out).</dd>
+<dd>The matching time was reached (or, with <code>--test</code> or <code>--count</code>, was
+worked out).</dd>
 <dt><code>1</code></dt>
 <dd>No options were given, the schedule is not valid, the <code>--timezone</code> is
-unknown, or no matching time exists (such as the 31st of February). A
+unknown, the <code>--count</code> is not a whole number from 1 to 1000, or no matching time exists (such as the 31st of February). A
 schedule counts as impossible when nothing matches within the next 400
 years, the length of time it takes the calendar to repeat itself.</dd>
 <dt><code>126</code></dt>

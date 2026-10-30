@@ -86,4 +86,5 @@ EXTRA_DIST = \
 	php/tests/004-block.phpt \
 	php/tests/005-signature.phpt \
 	php/tests/006-names.phpt \
+	php/tests/007-upcoming.phpt \
 	packaging/debian/php-dateblock.php

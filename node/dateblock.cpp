@@ -262,10 +262,17 @@ napi_value CronAfter(napi_env env, napi_callback_info info)
 
 NAPI_MODULE_INIT()
 {
-   napi_value fn;
+   // cronAfter(), plus how many times upcoming() lists by default and at
+   // most (shared with the other bindings through Date.h)
+   napi_value fn, countDefault, countMax;
    if (napi_create_function(env, "cronAfter", NAPI_AUTO_LENGTH, CronAfter,
                             NULL, &fn) != napi_ok ||
-       napi_set_named_property(env, exports, "cronAfter", fn) != napi_ok)
+       napi_set_named_property(env, exports, "cronAfter", fn) != napi_ok ||
+       napi_create_int32(env, Date::T_COUNT_DEFAULT, &countDefault) != napi_ok ||
+       napi_set_named_property(env, exports, "countDefault",
+                               countDefault) != napi_ok ||
+       napi_create_int32(env, Date::T_COUNT_MAX, &countMax) != napi_ok ||
+       napi_set_named_property(env, exports, "countMax", countMax) != napi_ok)
    {
       return NULL;
    }

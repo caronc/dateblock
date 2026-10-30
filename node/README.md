@@ -18,6 +18,7 @@ await dateblock('* /15');
 - Reads regular 5-field crontab entries too.
 - Any timezone, with daylight saving handled for you.
 - Waiting never blocks Node.js: `dateblock()` returns a promise.
+- `upcoming()` lists the next few times, to check a schedule at a glance.
 - TypeScript types are included; works with `import` and `require()`.
 
 This is the Node.js package of
@@ -43,8 +44,8 @@ systems (see
 
 ## Usage
 ```javascript
-import { dateblock, next } from '@caronc/dateblock';
-// or, in CommonJS: const { dateblock, next } = require('@caronc/dateblock');
+import { dateblock, next, upcoming } from '@caronc/dateblock';
+// or, in CommonJS: const { dateblock, next, upcoming } = require('@caronc/dateblock');
 
 // When is the next 10 minute mark?  (a Date; nothing waits)
 const when = next('* /10');
@@ -57,6 +58,9 @@ next('* /10', { ref: new Date('2026-01-01T12:34:56Z') });
 
 // A regular crontab entry: 9:00 every weekday
 next('0 9 * * 1-5', { isc: true });
+
+// The next 5 of them (an array of Dates; a quick way to check a schedule)
+upcoming('0 9 * * 1-5', { isc: true, count: 5 });
 
 // 9:00 in Tokyo, whatever timezone this computer is in
 await dateblock('0 0 9', { timeZone: 'Asia/Tokyo' });
@@ -85,6 +89,19 @@ it as a `Date`.
 | `isc` | `true` to read a regular 5-field crontab entry (see below). |
 | `timeZone` | Read the cron in this timezone (ie: `"America/Toronto"`) instead of the local one. |
 
+### upcoming(cron, options)
+Works out the next few moments that match `cron`, without waiting, and
+returns them as an array of `Date`s, earliest first.  It takes the same
+options as `next()`, plus:
+
+| Option | What it does |
+|---|---|
+| `count` | How many to return: just the next one unless given, at most 1000 (also exported as `COUNT_DEFAULT` and `COUNT_MAX`). |
+
+The first one is exactly what `next()` returns.  When the clocks go back
+and a time happens twice, both are listed.  The array is shorter than
+`count` only when no later time fits in a `Date` (past the year 275760).
+
 ### dateblock(cron, options)
 Waits until the next moment that matches `cron`.  It takes the same options
 as `next()`, plus:
@@ -103,7 +120,8 @@ right moment.
   what is wrong.
 - A cron that can never happen (such as February 31st), an unknown timezone
   or a reference too far away throws a `RangeError`.
-- Options of the wrong type throw a `TypeError`.
+- Options of the wrong type throw a `TypeError`; a `count` out of range
+  throws a `RangeError`.
 
 `dateblock()` throws these right away, before it starts waiting.
 

@@ -742,5 +742,144 @@ class WaitTests(unittest.TestCase):
         self.assertLessEqual(slept[0], 60)
 
 
+class UpcomingTests(unittest.TestCase):
+    """dateblock.upcoming(...), the next few times without waiting."""
+
+    def test_lists_the_next_few_times(self):
+        # 2026-01-01 is a Thursday
+        times = dateblock.upcoming("0 9 * * Mon-Fri", 5, isc=True,
+                                   ref=datetime(2026, 1, 1))
+        self.assertIsInstance(times, tuple)
+        self.assertEqual(times, (
+            datetime(2026, 1, 1, 9), datetime(2026, 1, 2, 9),
+            datetime(2026, 1, 5, 9), datetime(2026, 1, 6, 9),
+            datetime(2026, 1, 7, 9)))
+
+    def test_count_defaults_and_limits(self):
+        self.assertEqual(dateblock.COUNT_DEFAULT, 1)
+        self.assertEqual(dateblock.COUNT_MAX, 1000)
+        # Unless told otherwise, just the one dateblock() works out
+        ref = datetime(2026, 1, 1, 12)
+        self.assertEqual(dateblock.upcoming("@daily", ref=ref),
+                         (db("@daily", ref=ref, block=False),))
+        self.assertEqual(len(dateblock.upcoming("/1", dateblock.COUNT_MAX)),
+                         dateblock.COUNT_MAX)
+        for count in (0, -1, dateblock.COUNT_MAX + 1, 10**100, -10**100):
+            with self.assertRaises(ValueError):
+                dateblock.upcoming("* 5", count)
+        # A huge count isn't spelled out in the message
+        with self.assertRaisesRegex(ValueError, r"^count must be from 1 to 1000$"):
+            dateblock.upcoming("* 5", 10**100)
+        for count in ("5", 1.5, None):
+            with self.assertRaises(TypeError):
+                dateblock.upcoming("* 5", count)
+
+    def test_each_time_follows_the_one_before(self):
+        cron = "*/20 5 1-3 * * * +7"
+        at = datetime(2026, 1, 1)
+        for when in dateblock.upcoming(cron, 6, ref=at):
+            self.assertEqual(when, db(cron, ref=at, block=False))
+            at = when
+
+    def test_errors_match_dateblock(self):
+        with self.assertRaises(SyntaxError):
+            dateblock.upcoming("* 99")
+        with self.assertRaises(ValueError):
+            dateblock.upcoming("0 0 0 31 2 *")
+        with self.assertRaises(TypeError):
+            dateblock.upcoming(b"* 5")
+
+    def test_ends_early_past_the_year_9999(self):
+        for ref in (datetime(9990, 6, 1),
+                    datetime(9990, 6, 1, tzinfo=timezone.utc)):
+            with self.subTest(ref=ref):
+                times = dateblock.upcoming("@yearly", 1000, ref=ref)
+                self.assertEqual(len(times), 9)
+                self.assertEqual(times[-1].year, 9999)
+
+    def test_a_timezone_that_breaks_later_is_still_raised(self):
+        for error in (ValueError, OverflowError):
+            class FailsFrom2027(tzinfo):
+                def utcoffset(self, dt):
+                    return timedelta(0)
+
+                def dst(self, dt):
+                    return timedelta(0)
+
+                def fromutc(self, dt):
+                    if dt.year >= 2027:
+                        raise error("broken zone")
+                    return dt.replace(tzinfo=self)
+
+            with self.subTest(error=error):
+                ref = datetime(2025, 6, 1, tzinfo=FailsFrom2027())
+                with self.assertRaisesRegex(error, "broken zone"):
+                    dateblock.upcoming("@yearly", 5, ref=ref)
+
+    def test_a_timezone_that_breaks_near_the_year_9999_is_still_raised(self):
+        # Only the very last day can run out of dates; failing about two
+        # days before the end is the timezone's own fault
+        class FailsFromDec30(tzinfo):
+            def utcoffset(self, dt):
+                return timedelta(0)
+
+            def dst(self, dt):
+                return timedelta(0)
+
+            def fromutc(self, dt):
+                if dt >= datetime(9999, 12, 30, 1, tzinfo=self):
+                    raise OverflowError("broken zone")
+                return dt.replace(tzinfo=self)
+
+        ref = datetime(9999, 12, 29, 23, tzinfo=FailsFromDec30())
+        with self.assertRaisesRegex(OverflowError, "broken zone"):
+            dateblock.upcoming("@hourly", 5, ref=ref)
+
+    @needs_zoneinfo
+    def test_ends_early_past_the_year_9999_in_a_named_zone(self):
+        # West of UTC the UTC time runs out first; east of it the local one
+        for name in ("America/New_York", "Asia/Tokyo"):
+            with self.subTest(zone=name):
+                ref = datetime(9990, 6, 1, tzinfo=ZoneInfo(name))
+                times = dateblock.upcoming("@yearly", 1000, ref=ref)
+                self.assertEqual(len(times), 9)
+                self.assertEqual(times[-1].year, 9999)
+
+    @needs_zoneinfo
+    def test_keeps_both_copies_of_a_repeated_hour_in_a_zone(self):
+        # New York, 2025-11-02: the clocks go back, so 01:30 happens twice
+        zone = ZoneInfo("America/New_York")
+        times = dateblock.upcoming("0 30 1", 3,
+                                   ref=datetime(2025, 11, 1, 12, tzinfo=zone))
+        self.assertEqual([t.timestamp() for t in times],
+                         [1762061400, 1762065000, 1762151400])
+        self.assertTrue(all(t.tzinfo is zone for t in times))
+
+    @unittest.skipUnless(hasattr(_time, "tzset"), "needs time.tzset()")
+    def test_keeps_both_copies_of_a_repeated_hour_in_local_time(self):
+        # The second 01:30 has fold=1, so its timestamp() is right too
+        saved = os.environ.get("TZ")
+        try:
+            os.environ["TZ"] = "America/New_York"
+            _time.tzset()
+            if (_time.localtime(1762061400).tm_isdst != 1 or
+                    _time.localtime(1762065000).tm_isdst != 0):
+                self.skipTest("no timezone data for America/New_York")
+            times = dateblock.upcoming("0 30 1", 3,
+                                       ref=datetime(2025, 11, 1, 12))
+            stamps = [t.timestamp() for t in times]
+            folds = [t.fold for t in times]
+            single = db("0 30 1", ref=1762061400, block=False)
+        finally:
+            if saved is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = saved
+            _time.tzset()
+        self.assertEqual(stamps, [1762061400, 1762065000, 1762151400])
+        self.assertEqual(folds, [0, 1, 0])
+        self.assertEqual(single.fold, 1)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -33,7 +33,7 @@ try {
     '(building needs a C++ compiler and Python; see ' +
     'https://github.com/nodejs/node-gyp#installation)', { cause: error });
 }
-const { cronAfter } = addon;
+const { cronAfter, countDefault: COUNT_DEFAULT, countMax: COUNT_MAX } = addon;
 
 // How often a long wait checks the clock again (in milliseconds).  Timers
 // stop counting while the computer sleeps and don't notice the clock being
@@ -132,11 +132,21 @@ function next(cron, options) {
   const { isc, start, zone } = readOptions(cron, options);
   const toLocal = zoneReader(zone);
 
-  const result = cronAfter(Math.floor(start / 1000), cron, isc, toLocal);
+  return nextAfter(Math.floor(start / 1000), cron, isc, toLocal, false);
+}
+
+// The next match of 'cron' after 'after' (seconds since the epoch), as a
+// Date.  Errors are thrown, except that with 'quiet' it returns null when
+// no later moment can be found or shown.
+function nextAfter(after, cron, isc, toLocal, quiet) {
+  const result = cronAfter(after, cron, isc, toLocal);
   if (result.error === 'syntax') {
     throw new SyntaxError(`The cron is not formatted correctly: ${result.message}`);
   }
   if (result.error === 'never' || result.error === 'range') {
+    if (quiet) {
+      return null;
+    }
     throw new RangeError(result.message);
   }
   if (result.error) {
@@ -145,9 +155,44 @@ function next(cron, options) {
 
   const when = new Date(result.when * 1000);
   if (Number.isNaN(when.getTime())) {
+    if (quiet) {
+      return null;
+    }
     throw new RangeError('The time found is outside of the supported range.');
   }
   return when;
+}
+
+// Works out the next few moments that match 'cron', without waiting.
+// Takes the same options as next(), plus:
+//  - options.count: how many (1 to COUNT_MAX; COUNT_DEFAULT unless given)
+// Returns an array of Dates, earliest first.  It is shorter than count
+// when no later moment can be found (ie: past the largest date a Date can
+// hold).  Errors are thrown as next() throws them; a bad count throws a
+// TypeError or RangeError.
+function upcoming(cron, options) {
+  const { count = COUNT_DEFAULT } = options || {};
+  if (typeof count !== 'number') {
+    throw new TypeError('options.count must be a number');
+  }
+  if (!Number.isInteger(count) || count < 1 || count > COUNT_MAX) {
+    throw new RangeError(`options.count must be a whole number from 1 to ${COUNT_MAX}`);
+  }
+
+  // The options are read once, so every time uses the same ones
+  const { isc, start, zone } = readOptions(cron, options);
+  const toLocal = zoneReader(zone);
+  const times = [nextAfter(Math.floor(start / 1000), cron, isc, toLocal, false)];
+  while (times.length < count) {
+    // Each one follows the one before it
+    const after = times[times.length - 1].getTime() / 1000;
+    const when = nextAfter(after, cron, isc, toLocal, true);
+    if (when === null) {
+      break;
+    }
+    times.push(when);
+  }
+  return times;
 }
 
 // Waits until 'when' (milliseconds since the epoch), unless 'signal' is
@@ -198,4 +243,4 @@ async function dateblock(cron, options) {
   return when;
 }
 
-module.exports = { dateblock, next };
+module.exports = { dateblock, next, upcoming, COUNT_DEFAULT, COUNT_MAX };

@@ -88,6 +88,41 @@ out=$("$DATEBLOCK" -t -w Sat-Sun 2>&1)
 [ $? -eq 1 ] || fail "-w Sat-Sun did not exit with 1"
 echo "$out" | grep -q "'Sat-Sun' goes backwards" || fail "-w Sat-Sun was not explained: $out"
 
+# --count lists the next few times (the first is the one -t shows) and
+# never waits or runs the command
+dir=$(mktemp -d)
+out=$("$DATEBLOCK" -C 3 -i -c '0 9 * * Mon-Fri' -- touch "$dir/ran") ||
+   fail "--count exited with an error"
+[ ! -e "$dir/ran" ] || fail "--count ran the command"
+rm -rf "$dir"
+[ "$(echo "$out" | grep -c ' 09:00:00 (\(Mon\|Tue\|Wed\|Thu\|Fri\))$')" -eq 3 ] ||
+   fail "--count did not list 3 weekdays at 9:00: $out"
+echo "$out" | grep -q '^Command      : touch ' || fail "--count did not show the command: $out"
+[ "$(echo "$out" | sort -u | wc -l)" -eq "$(echo "$out" | wc -l)" ] ||
+   fail "--count listed a time twice: $out"
+# Control characters in the command are shown escaped, never as they are
+for opt in -t "-C 2"; do
+   # shellcheck disable=SC2086
+   out=$("$DATEBLOCK" $opt -n 5 -- echo "$(printf 'a\nFake  : b\033[2J')")
+   echo "$out" | grep -q '^Command      : echo a\\x0aFake  : b\\x1b\[2J$' ||
+      fail "'dateblock $opt' showed a command's control characters: $out"
+done
+start=$(date +%s)
+first=$("$DATEBLOCK" --count=2 -c '0 0 0 1 1' | sed -n 's/^Next Times   : //p')
+[ $(( $(date +%s) - start )) -le 1 ] || fail "--count waited"
+[ "$first" = "$(block_until -c '0 0 0 1 1' | sed 's/^Block Until  : //')" ] ||
+   fail "--count did not start with the time -t shows: $first"
+[ "$("$DATEBLOCK" -C 1000 -s /1 | wc -l)" -eq 1001 ] || fail "--count 1000 did not list 1000 times"
+for bad in 0 1001 -1 x 1.5 ''; do
+   out=$("$DATEBLOCK" -C "$bad" -n 5 2>&1)
+   code=$?
+   [ $code -eq 1 ] || [ $code -eq 255 ] || fail "--count '$bad' exited with $code"
+   [ $code -eq 255 ] || echo "$out" | grep -q "count must be a whole number from 1 to 1000" ||
+      fail "--count '$bad' was not explained: $out"
+done
+"$DATEBLOCK" -C 3 -c '* 99' >/dev/null 2>&1
+[ $? -eq 1 ] || fail "--count with a bad schedule did not exit with 1"
+
 # '*' mixed into a list is refused
 "$DATEBLOCK" -t -c '0 *,5' >/dev/null 2>&1
 [ $? -eq 1 ] || fail "dateblock accepted '*,5'"

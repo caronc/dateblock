@@ -36,14 +36,14 @@ using namespace std;
 
 #define AUTHOR "Chris Caron <lead2gold@gmail.com>"
 
-// 'text' for an error message: shortened if it is very long, and with
-// control characters written as \xNN so they can't upset a terminal or a
-// log file
-static string Shown(const string& text)
+// 'text' to show on screen: control characters are written as \xNN so
+// they can't upset a terminal or a log file, and it is shortened past
+// 'limit' characters (an error message only needs the start of it)
+static string Shown(const string& text, size_t limit = 60)
 {
    string shown;
    size_t i = 0;
-   for (; i < text.size() && shown.size() < 60; i++)
+   for (; i < text.size() && shown.size() < limit; i++)
    {
       unsigned char c = (unsigned char)text[i];
       if (c < 0x20 || c == 0x7f)
@@ -55,6 +55,18 @@ static string Shown(const string& text)
          shown += (char)c;
    }
    return (i < text.size()) ? shown + "..." : shown;
+}
+
+// Shows the command that would be run (in full, but with control
+// characters escaped as Shown() does)
+static void ShowCommand(const vector<char*>& command)
+{
+   cout << "Command      :";
+   for (size_t i = 0; i < command.size(); i++)
+   {
+      cout << " " << Shown(command[i], string::npos);
+   }
+   cout << endl;
 }
 
 // The options dateblock understands
@@ -82,6 +94,8 @@ static const Option OPTIONS[] = {
    {'x', "drift", true, "Additional drift time (in seconds)."},
    {'z', "timezone", true, "Timezone to read the schedule in (ie:\n"
                            "America/Toronto); defaults to this computer's."},
+   {'C', "count", true, "List the next N times (1-1000) instead of\n"
+                        "waiting; nothing is run."},
 };
 static const size_t OPTION_COUNT = sizeof(OPTIONS) / sizeof(OPTIONS[0]);
 
@@ -418,6 +432,11 @@ static void ProgramExamples()
      << endl << "    crontab entry: $> dateblock -i -c \"0 9 * * Mon-Fri\""
      << endl << endl;
 
+   cerr << "$> dateblock -C 5 -i -c \"0 9 * * Mon-Fri\"" << endl
+     << "    This would list (without waiting) the next 5 times the crontab"
+     << endl << "    entry '0 9 * * Mon-Fri' runs; a quick way to check a schedule."
+     << endl << endl;
+
    cerr << "$> dateblock -z Asia/Tokyo -c \"0 0 9\"" << endl
      << "    This would block until 9:00 in Tokyo, whatever timezone this"
      << endl << "    computer is in (daylight saving follows that timezone)."
@@ -434,6 +453,47 @@ static void ProgramExamples()
      << " 20th of the month) Hours divisible by 5 are: 0,"
      << endl <<  "     5,10,15 and 20."
      << endl << endl;
+}
+
+// The schedule given on the command line: a whole cron string (--cron),
+// or one value per field (--second, --minute, ...)
+struct Schedule
+{
+   bool whole;
+   bool isc;
+   string cron;
+   string fields[7];   // second, minute, hour, dom, month, dow, drift
+};
+
+// The first moment after 'from' that 'schedule' matches.  Throws as
+// Date::Cron() does.
+static Date NextAfter(const Date& from, const Schedule& schedule)
+{
+   if (schedule.whole)
+   {
+      return from.Cron(schedule.cron, schedule.isc);
+   }
+   const string *f = schedule.fields;
+   return from.Cron(f[0], f[1], f[2], f[3], f[4], f[5], f[6]);
+}
+
+// Reads the --count value: a whole number from 1 to Date::T_COUNT_MAX
+static bool ReadCount(const string& text, int& count)
+{
+   if (text.empty() || text.size() > 4)
+   {
+      return false;
+   }
+   count = 0;
+   for (size_t i = 0; i < text.size(); i++)
+   {
+      if (text[i] < '0' || text[i] > '9')
+      {
+         return false;
+      }
+      count = count * 10 + (text[i] - '0');
+   }
+   return count >= 1 && count <= Date::T_COUNT_MAX;
 }
 
 // True if 'name' (ie: America/Toronto) is in this computer's timezone
@@ -502,6 +562,16 @@ static int Run(int argc, char **argv)
       ProgramDetails();
       PrintOptions();
       ProgramExamples();
+      return 1;
+   }
+
+   // How many upcoming times to list (none: wait for the first one)
+   int count = 0;
+   if (cl.Has("count") && !ReadCount(cl.Get("count"), count))
+   {
+      cerr << "Error: --count must be a whole number from 1 to "
+           << Date::T_COUNT_MAX << " (not '" << Shown(cl.Get("count"))
+           << "')" << endl;
       return 1;
    }
 
@@ -578,18 +648,21 @@ static int Run(int argc, char **argv)
       sShown = sCronStr;
    }
 
+   Schedule schedule;
+   schedule.whole = cl.Has("cron");
+   schedule.isc = useISC;
+   schedule.cron = sCronStr;
+   schedule.fields[0] = sSecOffset;
+   schedule.fields[1] = sMinOffset;
+   schedule.fields[2] = sHourOffset;
+   schedule.fields[3] = sDomOffset;
+   schedule.fields[4] = sMonthOffset;
+   schedule.fields[5] = sDowOffset;
+   schedule.fields[6] = sDriftOffset;
+
    try
    {
-      if (cl.Has("cron"))
-      {
-         dObjFinish = dObjStart.Cron(sCronStr, useISC);
-      }
-      else
-      {
-         dObjFinish = dObjStart.Cron(sSecOffset, sMinOffset, sHourOffset,
-                                     sDomOffset, sMonthOffset, sDowOffset,
-                                     sDriftOffset);
-      }
+      dObjFinish = NextAfter(dObjStart, schedule);
    }
    catch (const invalid_argument& e)
    {
@@ -611,18 +684,56 @@ static int Run(int argc, char **argv)
       return 1;
    }
 
+   if (count > 0)
+   {
+      // List the times instead of waiting.  The list simply ends early
+      // once no later time can be found (ie: past the largest date this
+      // computer can show).
+      cout << "Current Time : "<< dObjStart.Str(sTimeFmt + " (%a)") << endl;
+      cout << "Next Times   : "<< dObjFinish.Str(sTimeFmt + " (%a)") << endl;
+      int found = 1;
+      Date dObjAt(dObjFinish);
+      for (; found < count; found++)
+      {
+         try
+         {
+            dObjAt = NextAfter(dObjAt, schedule);
+         }
+         catch (const runtime_error&)
+         {
+            // No later time matches (or it can't be shown)
+            break;
+         }
+         catch (const out_of_range&)
+         {
+            break;
+         }
+         catch (const exception& e)
+         {
+            cerr << "Error: " << e.what() << endl;
+            return 1;
+         }
+         cout << "               " << dObjAt.Str(sTimeFmt + " (%a)") << endl;
+      }
+      if (!command.empty())
+      {
+         ShowCommand(command);
+      }
+      if (found < count)
+      {
+         cerr << "Note: only " << found << " of " << count
+              << " times could be listed; no later time matches." << endl;
+      }
+      return 0;
+   }
+
    if (cl.Has("verbose") || cl.Has("test"))
    {
       cout << "Current Time : "<< dObjStart.Str(sTimeFmt + " (%a)") << endl;
       cout << "Block Until  : "<< dObjFinish.Str(sTimeFmt + " (%a)") << endl;
       if (!command.empty())
       {
-         cout << "Command      :";
-         for (size_t i = 0; i < command.size(); i++)
-         {
-            cout << " " << command[i];
-         }
-         cout << endl;
+         ShowCommand(command);
       }
    }
 
