@@ -151,10 +151,11 @@ with the command's exit code; see <a href="#RUNNING-A-COMMAND" title="RUNNING A 
   The day(s) of the month to unblock on (1-31).</p>
 
 <p><code>-m</code>, <code>--month=</code><var>MONTH</var>:
-  The month(s) to unblock on (1-12; Jan=1, ..., Dec=12).</p>
+  The month(s) to unblock on (1-12, or Jan to Dec).</p>
 
 <p><code>-w</code>, <code>--dow=</code><var>DOW</var>:
-  The day(s) of the week to unblock on (0-6; Sun=0, ..., Sat=6).</p>
+  The day(s) of the week to unblock on (0-6, or Sun to Sat; Sunday is 0 or
+  7).</p>
 
 <p><code>-x</code>, <code>--drift=</code><var>DRIFT</var>:
   Extra seconds to wait once the time is matched; see <a href="#DRIFTING" title="DRIFTING" data-bare-link="true">DRIFTING</a>. Use the
@@ -189,6 +190,14 @@ match: <code>-d 13 -w 5</code> is every Friday the 13th.</p>
 <dd>any value. It must be on its own; <code>*,5</code> is not valid.</dd>
 </dl>
 
+<p>The month and the day of the week can also be written as names, in any
+case: <code>Jan</code> to <code>Dec</code> and <code>Sun</code> to <code>Sat</code> (ie: <code>Mon-Fri</code> or <code>Jan,Jul</code>). A
+range of names can't go backwards: <code>Sat-Sun</code> is refused (write <code>Sat,Sun</code>
+or <code>Sat-7</code>), since it would otherwise mean every day of the week.</p>
+
+<p>As in <span class="man-ref">crontab<span class="s">(5)</span></span>, a day of the week of <code>7</code> is Sunday too, so <code>Fri-7</code> is
+Friday to Sunday.</p>
+
 <p>These can be mixed when separated by commas, so <code>*/a,b,c-d,/e</code> is valid.
 However <code>x-y-z</code>, <code>/x/y</code>, <code>/x-y</code>, an unfinished <code>x-</code>, an empty entry
 (<code>5,,6</code>) and a <code>*</code> mixed with other entries are not. Every value
@@ -199,7 +208,7 @@ must be within the range of its field; <code>400-4000</code> never works for any
 <p>The <code>--cron</code> string has up to 7 fields separated by white space:</p>
 
 <pre><code>drift time ---------------------------------------------+
-day of week (0 - 6) (Sunday=0) ----------------------+  |
+day of week (0 - 7) (Sunday=0 or 7) -----------------+  |
 month (1 - 12) -----------------------------------+  |  |
 day of month (1 - 31) -------------------------+  |  |  |
 hour (0 - 23) ------------------------------+  |  |  |  |
@@ -216,9 +225,29 @@ sec (0 - 59) -------------------------+  |  |  |  |  |  |
 <code>* /5 +60</code> is the same as <code>* /5 * * * * 60</code>. Nothing may follow the <code>+</code>
 entry.</p>
 
+<p>The <span class="man-ref">crontab<span class="s">(5)</span></span> shortcuts can stand for the whole string, with or without
+<code>--isc</code>. Without <code>--isc</code> a <code>+</code> drift may follow one (ie: <code>@daily +30</code>);
+nothing else may, and with <code>--isc</code> nothing may follow it at all (a crontab
+entry has no drift):</p>
+
+<ul>
+  <li>
+<code>@hourly</code>: the start of every hour.</li>
+  <li>
+<code>@daily</code> (or <code>@midnight</code>): every day at 00:00.</li>
+  <li>
+<code>@weekly</code>: every Sunday at 00:00.</li>
+  <li>
+<code>@monthly</code>: the 1st of every month at 00:00.</li>
+  <li>
+<code>@yearly</code> (or <code>@annually</code>): every January 1st at 00:00.</li>
+</ul>
+
+<p><code>@reboot</code> is refused, since it isn't a time.</p>
+
 <p>With <code>--isc</code> the string is a regular <span class="man-ref">crontab<span class="s">(5)</span></span> entry instead:</p>
 
-<pre><code>day of week (0 - 6) (Sunday=0) ----------+
+<pre><code>day of week (0 - 7) (Sunday=0 or 7) -----+
 month (1 - 12) ----------------------+   |
 day of month (1 - 31) -----------+   |   |
 hour (0 - 23) ---------------+   |   |   |
@@ -333,6 +362,12 @@ $ dateblock -c "* 5 +20"
 <p>Block until 9:00 on weekdays, written as a regular crontab entry:</p>
 
 <pre><code>$ dateblock -i -c "0 9 * * 1-5"
+$ dateblock -i -c "0 9 * * Mon-Fri"
+</code></pre>
+
+<p>Block until the next midnight, then 30 seconds more:</p>
+
+<pre><code>$ dateblock -c "@daily +30"
 </code></pre>
 
 <p>Block until 9:00 in Tokyo, whatever timezone this computer is in:</p>

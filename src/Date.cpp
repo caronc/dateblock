@@ -27,7 +27,6 @@
 #include <limits>
 #include <algorithm>
 #include <vector>
-#include <ctype.h>
 #include <stdexcept>
 #include <new>
 #include "Date.h"
@@ -72,9 +71,7 @@ static_assert(numeric_limits<time_t>::is_signed,
 
 // The longest cron string (or single field) that is read; anything longer
 // is refused before it is looked at
-#ifndef CRON_MAX_LENGTH
-#define CRON_MAX_LENGTH 65536
-#endif
+#define CRON_MAX_LENGTH Date::T_CRON_LENGTH_MAX
 
 namespace {
    // Number of days in a month (month is 0-11, year is the full year)
@@ -254,10 +251,112 @@ namespace {
       return (left > most) ? most : (unsigned long)left;
    }
 
+   // Character tests for cron strings, which are plain ASCII.  The C
+   // library's isalpha(), tolower() and so on follow the computer's
+   // language settings instead (ie: in Turkish 'I' doesn't lower to 'i',
+   // so '@DAILY' would not be found), so they are not used.
+   bool IsSpace(unsigned char c)
+   {
+      return c == ' ' || (c >= '\t' && c <= '\r');
+   }
+
+   bool IsDigit(unsigned char c)
+   {
+      return c >= '0' && c <= '9';
+   }
+
+   bool IsLetter(unsigned char c)
+   {
+      return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+   }
+
+   unsigned char Lower(unsigned char c)
+   {
+      return (c >= 'A' && c <= 'Z') ? (unsigned char)(c - 'A' + 'a') : c;
+   }
+
+   // 'text' for an error message: shortened if it is very long, and with
+   // anything but printable ASCII written as \xNN (control characters,
+   // and every byte of other characters such as UTF-8 or text direction
+   // marks), so it can't upset a terminal or a log file
+   //  - 'pos' and 'len' pick a part of 'text' (all of it by default),
+   //    without copying the rest.
+   string Shown(const string& text, size_t pos = 0,
+                size_t len = string::npos)
+   {
+      size_t end = (len > text.size() - pos) ? text.size() : pos + len;
+      string shown;
+      size_t i = pos;
+      for (; i < end && shown.size() < 40; i++)
+      {
+         unsigned char c = (unsigned char)text[i];
+         if (c < 0x20 || c >= 0x7f)
+         {
+            const char *hex = "0123456789abcdef";
+            shown += string("\\x") + hex[c >> 4] + hex[c & 0xf];
+         }
+         else
+            shown += (char)c;
+      }
+      return (i < end) ? shown + "..." : shown;
+   }
+
+   // True if 'a' and 'b' are the same, ignoring upper and lower case
+   bool SameWord(const string& a, const char *b)
+   {
+      size_t i = 0;
+      for (; i < a.size() && b[i]; i++)
+         if (Lower((unsigned char)a[i]) != Lower((unsigned char)b[i]))
+            return false;
+      return i == a.size() && !b[i];
+   }
+
+   // crontab's shortcuts, and the fields each one stands for (dateblock
+   // format: second to day of week; ISC: minute to day of week)
+   struct Shortcut
+   {
+      const char *name;
+      const char *dateblock;
+      const char *isc;
+   };
+
+   const Shortcut SHORTCUTS[] = {
+      {"@yearly",   "0 0 0 1 1 *", "0 0 1 1 *"},
+      {"@annually", "0 0 0 1 1 *", "0 0 1 1 *"},
+      {"@monthly",  "0 0 0 1 * *", "0 0 1 * *"},
+      {"@weekly",   "0 0 0 * * 0", "0 0 * * 0"},
+      {"@daily",    "0 0 0 * * *", "0 0 * * *"},
+      {"@midnight", "0 0 0 * * *", "0 0 * * *"},
+      {"@hourly",   "0 0 * * * *", "0 * * * *"}};
+
+   // Replaces a shortcut (ie: '@daily') with the fields it stands for.
+   // Returns false (with 'why' set) if 'token' is not one.
+   bool ExpandShortcut(const string& token, bool isISC,
+                       vector<string>& tokens, string& why)
+   {
+      for (size_t i = 0; i < sizeof(SHORTCUTS) / sizeof(SHORTCUTS[0]); i++)
+      {
+         if (!SameWord(token, SHORTCUTS[i].name))
+            continue;
+         const char *fields = isISC ? SHORTCUTS[i].isc : SHORTCUTS[i].dateblock;
+         for (; *fields; fields++)
+            if (*fields != ' ')
+               tokens.push_back(string(1, *fields));
+         return true;
+      }
+      why = SameWord(token, "@reboot") ?
+         "'@reboot' is not a time (it means when the computer starts)" :
+         "'" + Shown(token) + "' is not a shortcut (use @yearly, @annually, "
+         "@monthly, @weekly, @daily, @midnight or @hourly)";
+      return false;
+   }
+
    // Splits a whitespace separated cron string into its fields.
    //  - Missing fields are filled in with '*'.
    //  - A '+N' entry (dateblock format only) jumps straight to the drift
    //    field; nothing may follow it.
+   //  - A shortcut such as '@daily' must be the first entry; only a '+N'
+   //    drift may follow it (dateblock format).
    //  - Returns false (with 'why' set) if the string has more fields than
    //    allowed, or a '+' without a drift.
    bool SplitCronString(const string& strIn, bool isISC,
@@ -269,17 +368,18 @@ namespace {
                                Date::DBL_CRON_FIELD_COUNT;
       bool ok = true;
       bool drifted = false;
+      string shortcut;
       size_t pos = 0;
 
       tokens.clear();
       while (true)
       {
-         while (pos < strIn.size() && isspace((unsigned char)strIn[pos]))
+         while (pos < strIn.size() && IsSpace((unsigned char)strIn[pos]))
             pos++;
          if (pos == strIn.size())
             break;
          size_t start = pos;
-         while (pos < strIn.size() && !isspace((unsigned char)strIn[pos]))
+         while (pos < strIn.size() && !IsSpace((unsigned char)strIn[pos]))
             pos++;
          string token(strIn, start, pos - start);
 
@@ -288,6 +388,31 @@ namespace {
             why = "nothing may follow the drift (the '+' entry)";
             ok = false;
             break;
+         }
+         if (!shortcut.empty() && (isISC || token[0] != '+'))
+         {
+            why = isISC ?
+               "nothing may follow '" + shortcut + "'" :
+               "only a drift (ie: '+20') may follow '" + shortcut + "'";
+            ok = false;
+            break;
+         }
+         if (token[0] == '@')
+         {
+            if (!tokens.empty())
+            {
+               why = "a shortcut such as '" + Shown(token) +
+                     "' must be the first entry";
+               ok = false;
+               break;
+            }
+            if (!ExpandShortcut(token, isISC, tokens, why))
+            {
+               ok = false;
+               break;
+            }
+            shortcut = token;
+            continue;
          }
          if (tokens.size() >= token_max)
          {
@@ -324,45 +449,43 @@ namespace {
       return ok;
    }
 
-   // 'text' for an error message: shortened if it is very long, and with
-   // control characters written as \xNN so they can't upset a terminal or
-   // a log file
-   //  - 'pos' and 'len' pick a part of 'text' (all of it by default),
-   //    without copying the rest.
-   string Shown(const string& text, size_t pos = 0,
-                size_t len = string::npos)
-   {
-      size_t end = (len > text.size() - pos) ? text.size() : pos + len;
-      string shown;
-      size_t i = pos;
-      for (; i < end && shown.size() < 40; i++)
-      {
-         unsigned char c = (unsigned char)text[i];
-         if (c < 0x20 || c == 0x7f)
-         {
-            const char *hex = "0123456789abcdef";
-            shown += string("\\x") + hex[c >> 4] + hex[c & 0xf];
-         }
-         else
-            shown += (char)c;
-      }
-      return (i < end) ? shown + "..." : shown;
-   }
-
    // Reads the number starting at 'pos' (moving 'pos' past it), stopping
    // at 'end'.  Fails (with 'why' set) if there is no number there or it
    // is outside of 'lo' to 'hi'.
+   //  - 'names' (if not NULL) holds a name for each value from 'lo' on
+   //    (ie: "Jan" for 1), ending with NULL; a name may be used instead of
+   //    the number, and upper and lower case don't matter.
    bool ReadNumber(const string& str, size_t& pos, size_t end, int lo, int hi,
-                   long long& out, string& why)
+                   long long& out, string& why,
+                   const char *const *names = NULL)
    {
       size_t start = pos;
       out = 0;
-      while (pos < end && isdigit((unsigned char)str[pos]))
+      if (names && pos < end && IsLetter((unsigned char)str[pos]))
+      {
+         while (pos < end && IsLetter((unsigned char)str[pos]))
+            pos++;
+         string word(str, start, pos - start);
+         string list;
+         for (int i = 0; names[i]; i++)
+         {
+            if (SameWord(word, names[i]))
+            {
+               out = lo + i;
+               return true;
+            }
+            list += string(i == 0 ? "" : names[i + 1] ? ", " : " or ") +
+                    names[i];
+         }
+         why = "'" + Shown(word) + "' is not a name (use " + list + ")";
+         return false;
+      }
+      while (pos < end && IsDigit((unsigned char)str[pos]))
       {
          out = out * 10 + (str[pos] - '0');
          if (out > hi)
          {
-            while (pos < end && isdigit((unsigned char)str[pos]))
+            while (pos < end && IsDigit((unsigned char)str[pos]))
                pos++;
             why = Shown(str, start, pos - start) + " is outside of " +
                   to_string(lo) + "-" + to_string(hi);
@@ -657,23 +780,40 @@ namespace {
    enum Field { F_SEC, F_MIN, F_HOUR, F_DOM, F_MONTH, F_DOW, F_DRIFT,
                 F_COUNT };
 
-   // Each field's lowest and highest value, and its name (for messages)
+   // Each field's lowest and highest value, its name (for messages), the
+   // names its values may be written as (NULL for none), and the highest
+   // value a cron string may use for it
    struct FieldInfo
    {
       int lo, hi;
       const char *name;
+      const char *const *names;
+      int written;
    };
+
+   const char *const MONTH_NAMES[] = {
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", NULL};
+   const char *const DOW_NAMES[] = {
+      "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", NULL};
+
+   // As in crontab, a day of week of 7 is Sunday too (so 'Fri-7' works)
+   const int DOW_SUNDAY_TOO = 7;
 
    const FieldInfo& Field(int field)
    {
       static const FieldInfo fields[F_COUNT] = {
-         {Date::T_SEC_MIN, Date::T_SEC_MAX, "second"},
-         {Date::T_MIN_MIN, Date::T_MIN_MAX, "minute"},
-         {Date::T_HOUR_MIN, Date::T_HOUR_MAX, "hour"},
-         {Date::T_DOM_MIN, Date::T_DOM_MAX, "day of month"},
-         {Date::T_MONTH_MIN, Date::T_MONTH_MAX, "month"},
-         {Date::T_DOW_MIN, Date::T_DOW_MAX, "day of week"},
-         {Date::T_DRIFT_MIN, Date::T_DRIFT_MAX, "drift"}};
+         {Date::T_SEC_MIN, Date::T_SEC_MAX, "second", NULL, Date::T_SEC_MAX},
+         {Date::T_MIN_MIN, Date::T_MIN_MAX, "minute", NULL, Date::T_MIN_MAX},
+         {Date::T_HOUR_MIN, Date::T_HOUR_MAX, "hour", NULL, Date::T_HOUR_MAX},
+         {Date::T_DOM_MIN, Date::T_DOM_MAX, "day of month", NULL,
+          Date::T_DOM_MAX},
+         {Date::T_MONTH_MIN, Date::T_MONTH_MAX, "month", MONTH_NAMES,
+          Date::T_MONTH_MAX},
+         {Date::T_DOW_MIN, Date::T_DOW_MAX, "day of week", DOW_NAMES,
+          DOW_SUNDAY_TOO},
+         {Date::T_DRIFT_MIN, Date::T_DRIFT_MAX, "drift", NULL,
+          Date::T_DRIFT_MAX}};
       return fields[field];
    }
 
@@ -700,10 +840,13 @@ namespace {
    //  - Each entry is handed to 'add(first, last, step)', which may refuse
    //    it by returning false.
    //  - 'given' is false when the field is '*' (or empty).
+   //  - 'names' (if not NULL) lets x and y be names (ie: 'Mon-Fri'); see
+   //    ReadNumber().
    //  - Returns false (with 'why' set) if it is not formatted correctly.
    template <class Add>
    bool ReadField(const string& str, int lo, int hi, bool stepFromLowest,
-                  Add& add, bool& given, string& why)
+                  Add& add, bool& given, string& why,
+                  const char *const *names = NULL)
    {
       given = false;
       if (str.empty())
@@ -762,16 +905,27 @@ namespace {
             }
             else
             {
-               if (!ReadNumber(str, pos, end, lo, hi, first, why))
+               if (!ReadNumber(str, pos, end, lo, hi, first, why, names))
                   return false;
                last = first;
                if (pos < end && str[pos] == '-')
                {
                   // Range
                   pos++;
-                  if (!ReadNumber(str, pos, end, lo, hi, last, why))
+                  bool named = IsLetter((unsigned char)str[start]) ||
+                               (pos < end && IsLetter((unsigned char)str[pos]));
+                  if (!ReadNumber(str, pos, end, lo, hi, last, why, names))
                   {
                      why = "the end of the range: " + why;
+                     return false;
+                  }
+                  // A backwards range of names (ie: 'Sat-Sun') would swap
+                  // round to every day of the week, so it is refused
+                  if (first > last && named)
+                  {
+                     why = "'" + Shown(str, start, end - start) + "' goes "
+                           "backwards (list them instead, ie: 'Sat,Sun', or "
+                           "use 7 for Sunday)";
                      return false;
                   }
                   if (first > last)
@@ -885,11 +1039,17 @@ namespace {
       for (int i = 0; i < F_DRIFT; i++)
       {
          AddToMask add = { 0, Field(i).lo };
-         if (!ReadField(fields[i], Field(i).lo, Field(i).hi, stepFromLowest,
-                        add, out.given[i], why))
+         if (!ReadField(fields[i], Field(i).lo, Field(i).written,
+                        stepFromLowest, add, out.given[i], why,
+                        Field(i).names))
          {
             why = string(Field(i).name) + " '" + Shown(fields[i]) + "': " + why;
             return false;
+         }
+         if (i == F_DOW && (add.mask >> DOW_SUNDAY_TOO) & 1)
+         {
+            add.mask &= ~((uint64_t)1 << DOW_SUNDAY_TOO);
+            add.mask |= (uint64_t)1 << Date::T_DOW_MIN;
          }
          out.mask[i] = add.mask;
          out.given[i] = out.given[i] && add.mask != 0;
@@ -944,10 +1104,8 @@ namespace {
    void ParseCron(const string& strIn, bool isISC, CronFields& out)
    {
       if (strIn.size() > CRON_MAX_LENGTH)
-         throw invalid_argument("the cron is too long (" +
-                                to_string(strIn.size()) +
-                                " characters; at most " +
-                                to_string(CRON_MAX_LENGTH) + ")");
+         throw invalid_argument("the cron is too long (more than " +
+                                to_string(CRON_MAX_LENGTH) + " characters)");
 
       vector<string> tokens;
       string why;

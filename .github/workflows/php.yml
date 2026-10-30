@@ -71,10 +71,14 @@ jobs:
       - name: Check composer.json
         run: composer validate --strict
 
+      # Installing into PHP's own folders needs root, and PIE can't ask for
+      # sudo by itself without a terminal, so it is run with sudo (git has
+      # to be told the checkout is safe to read as root)
       - name: Install with PIE
         run: |
-          pie repository:add path "$GITHUB_WORKSPACE"
-          pie install --no-interaction "caronc/dateblock:*@dev"
+          sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          sudo "$(command -v pie)" repository:add path "$GITHUB_WORKSPACE"
+          sudo "$(command -v pie)" install --no-interaction "caronc/dateblock:*@dev"
 
       - name: Check it is loaded
         run: |

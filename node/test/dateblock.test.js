@@ -23,6 +23,16 @@ test('drift, range steps and the month field', () => {
   assert.strictEqual(utc('0 0 0 * 3'), '2026-03-01T00:00:00.000Z');
 });
 
+test('month and weekday names, and shortcuts such as @daily', () => {
+  // 2026-01-01 is a Thursday
+  assert.strictEqual(utc('0 0 9 * * Sat,Sun'), '2026-01-03T09:00:00.000Z');
+  assert.strictEqual(utc('0 0 0 1 Mar'), '2026-03-01T00:00:00.000Z');
+  assert.strictEqual(utc('0 9 * * mon-fri', { isc: true }), '2026-01-01T09:00:00.000Z');
+  assert.strictEqual(utc('@daily'), '2026-01-02T00:00:00.000Z');
+  assert.strictEqual(utc('@weekly', { isc: true }), '2026-01-04T00:00:00.000Z');
+  assert.strictEqual(utc('@daily +30'), '2026-01-01T00:00:30.000Z');
+});
+
 test('regular crontab entries with isc', () => {
   assert.strictEqual(utc('*/15 * * * *', { isc: true }), '2026-01-01T00:15:00.000Z');
   assert.strictEqual(utc('0 0 13 * 5', { isc: true }), '2026-01-02T00:00:00.000Z');
@@ -74,9 +84,22 @@ test('a cron that is not written correctly is a SyntaxError', () => {
     ['0\u0000 5', false, 'is not understood'],
     ['5'.repeat(100000), false, 'the cron is too long'],
     ['*/15 * * * * *', true, 'there are too many fields'],
+    ['0 0 0 * * Monday', false, "'Monday' is not a name"],
+    ['@reboot', false, "'@reboot' is not a time"],
   ]) {
     assert.throws(() => next(cron, { isc }),
       (e) => e instanceof SyntaxError && e.message.includes(message), cron.slice(0, 20));
+  }
+});
+
+test('the longest cron allowed, and one character more', () => {
+  const longest = '0' + ' '.repeat(65535);
+  assert.ok(next(longest) instanceof Date);
+  // A 2 byte character past the limit is still refused (only the start of
+  // a huge string is copied)
+  for (const extra of [' ', '\u00e9', '\u{1f600}']) {
+    assert.throws(() => next(longest + extra),
+      (e) => e instanceof SyntaxError && e.message.includes('the cron is too long'));
   }
 });
 

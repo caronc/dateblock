@@ -15,9 +15,11 @@
 # You should have received a copy of the GNU General Public License along with
 # this program; if not, see <https://www.gnu.org/licenses/>.
 """Tests for the dateblock Python module (run with: python3 -m unittest)."""
+import locale
 import os
 import random
 import time as _time
+import tracemalloc
 import unittest
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 
@@ -246,6 +248,39 @@ class DateblockTests(unittest.TestCase):
         self.assertEqual(db("* 10 +5,8", ref=date(2000, 3, 1), block=False),
                          datetime(2000, 3, 1, 0, 10, 5))
 
+    def test_month_and_weekday_names(self):
+        # 2000-01-01 is a Saturday
+        ref = date(2000, 1, 1)
+        self.assertEqual(db("0 0 9 * * Mon-Fri", ref=ref, block=False),
+                         datetime(2000, 1, 3, 9, 0, 0))
+        self.assertEqual(db("0 0 0 1 mar", ref=ref, block=False),
+                         datetime(2000, 3, 1, 0, 0, 0))
+        self.assertEqual(db("0 9 * * SUN", isc=True, ref=ref, block=False),
+                         datetime(2000, 1, 2, 9, 0, 0))
+
+    def test_shortcuts(self):
+        ref = date(2000, 1, 1)
+        for cron, isc, expect in (
+                ("@hourly", False, datetime(2000, 1, 1, 1, 0, 0)),
+                ("@daily", False, datetime(2000, 1, 2, 0, 0, 0)),
+                ("@weekly", True, datetime(2000, 1, 2, 0, 0, 0)),
+                ("@monthly", False, datetime(2000, 2, 1, 0, 0, 0)),
+                ("@yearly", True, datetime(2001, 1, 1, 0, 0, 0)),
+                ("@daily +30", False, datetime(2000, 1, 1, 0, 0, 30))):
+            self.assertEqual(db(cron, isc=isc, ref=ref, block=False), expect,
+                             cron)
+
+    def test_bad_names_and_shortcuts_raise_syntax_error(self):
+        for cron, says in (
+                ("0 0 0 * * Monday", "'Monday' is not a name"),
+                ("0 0 0 * * Sat-Sun", "'Sat-Sun' goes backwards"),
+                ("0 Mon", "'Mon' is not a number"),
+                ("@reboot", "'@reboot' is not a time"),
+                ("@daily 5", "only a drift (ie: '+20') may follow")):
+            with self.assertRaises(SyntaxError) as raised:
+                db(cron, block=False)
+            self.assertIn(says, str(raised.exception))
+
     def test_isc_format_has_no_seconds_field(self):
         ref = datetime(2000, 1, 1, 0, 0, 30)
         self.assertEqual(db("/1", isc=True, ref=ref, block=False),
@@ -280,6 +315,55 @@ class DateblockTests(unittest.TestCase):
         with self.assertRaises(SyntaxError) as raised:
             db("*" * 70000, block=False)
         self.assertIn("too long", str(raised.exception))
+
+    def test_longest_cron_allowed(self):
+        longest = "0" + " " * 65535
+        db(longest, block=False)
+        # One more character is refused, even a 2 byte one
+        for extra in (" ", "\u00e9"):
+            with self.assertRaises(SyntaxError) as raised:
+                db(longest + extra, block=False)
+            self.assertIn("too long", str(raised.exception))
+
+    def test_huge_cron_is_refused_without_copying_it(self):
+        # 20 MB of 'é' (40 MB as UTF-8); only its start is ever converted
+        huge = "é" * 20_000_000
+        tracemalloc.start()
+        try:
+            with self.assertRaises(SyntaxError) as raised:
+                db(huge, block=False)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        self.assertIn("too long", str(raised.exception))
+        self.assertLess(peak, 2_000_000)
+
+    def test_cron_must_be_text_without_nul(self):
+        with self.assertRaises(ValueError):
+            db("0 0\x00 9", block=False)
+        for cron in (b"0 0 9", 5, None):
+            with self.assertRaises(TypeError):
+                db(cron, block=False)
+
+    def test_names_read_the_same_in_any_language(self):
+        # In Turkish 'I' doesn't lower to 'i'
+        before = locale.setlocale(locale.LC_ALL)
+        for name in ("tr_TR.UTF-8", "tr_TR.utf8"):
+            try:
+                locale.setlocale(locale.LC_ALL, name)
+                break
+            except locale.Error:
+                continue
+        else:
+            self.skipTest("no Turkish locale installed")
+        try:
+            ref = date(2000, 1, 1)
+            self.assertEqual(db("@MIDNIGHT", ref=ref, block=False),
+                             datetime(2000, 1, 2, 0, 0, 0))
+            self.assertEqual(db("0 0 9 * * FRI", ref=ref, block=False),
+                             datetime(2000, 1, 7, 9, 0, 0))
+        finally:
+            locale.setlocale(locale.LC_ALL, before)
 
     def test_aware_reference_with_a_broken_timestamp(self):
         # A datetime subclass can make timestamp() return anything

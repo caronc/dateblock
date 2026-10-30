@@ -112,7 +112,7 @@ Up to 7 fields, separated by spaces.  Fields left off the end count as `*`
 (anything).
 ```
      drift time ----------------------------------------------+
-     day of week (0 - 6) (Sunday=0) -----------------------+  |
+     day of week (0 - 7) (Sunday=0 or 7) ------------------+  |
      month (1 - 12) ------------------------------------+  |  |
      day of month (1 - 31) --------------------------+  |  |  |
      hour (0 - 23) -------------------------------+  |  |  |  |
@@ -132,6 +132,14 @@ Each field can be:
 | `1-5` | 1 to 5 |
 | `1-30/5` | every 5th from 1 to 30 (1, 6, 11...) |
 | `1,5,20-25` | any of these, mixed together |
+| `Mon-Fri`, `Jan,Jul` | names for the day of the week and the month (any case) |
+| `7` (day of the week) | Sunday, as `0` is (so `Fri-7` is Friday to Sunday) |
+
+A shortcut can stand for the whole cron: `@hourly`, `@daily` (or
+`@midnight`), `@weekly` (Sundays), `@monthly` and `@yearly` (or
+`@annually`), each at the start of the hour or day.  Only a drift may
+follow one, ie: `'@daily +30'` (and not with `isc: true`, since a crontab
+entry has no drift).
 
 Things worth knowing:
 - Fields smaller than the smallest one you give start at their lowest

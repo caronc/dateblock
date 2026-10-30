@@ -295,7 +295,11 @@ ZEND_FUNCTION(dateblock)
       PhpZone zone(&tz);
       try
       {
-         when = Date::CronAfter((time_t)at->sse, std::string(cron, cron_len),
+         // A huge cron is only copied up to just past the longest one
+         // allowed; that is enough for it to be refused
+         size_t length = (cron_len > Date::T_CRON_LENGTH_MAX) ?
+                         Date::T_CRON_LENGTH_MAX + 1 : cron_len;
+         when = Date::CronAfter((time_t)at->sse, std::string(cron, length),
                                 isc != 0, zone);
          found = true;
       }

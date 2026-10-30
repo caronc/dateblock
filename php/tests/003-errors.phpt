@@ -22,6 +22,9 @@ attempt(fn() => dateblock('0 *,5', false));
 attempt(fn() => dateblock('5-', false));
 attempt(fn() => dateblock("0\0 5", false));
 attempt(fn() => dateblock(str_repeat('5', 100000), false));
+// The longest cron allowed works; one byte more is refused
+attempt(fn() => dateblock('0' . str_repeat(' ', 65535), false)->format('s'));
+attempt(fn() => dateblock('0' . str_repeat(' ', 65535) . "\u{e9}", false));
 attempt(fn() => dateblock('*/15 * * * * *', false, null, true));
 
 // A cron that never happens
@@ -48,7 +51,9 @@ ValueError: dateblock(): Argument #1 ($cron) is not a valid cron: minute '99': 9
 ValueError: dateblock(): Argument #1 ($cron) is not a valid cron: minute '*,5': '*' can't be mixed with other entries (use '*' on its own)
 ValueError: dateblock(): Argument #1 ($cron) is not a valid cron: second '5-': the end of the range: a number is missing at the end
 ValueError: dateblock(): Argument #1 ($cron) is not a valid cron: second '0\x00': '\x00' is not understood (each entry is *, x, x-y, x-y/z or */x)
-ValueError: dateblock(): Argument #1 ($cron) is not a valid cron: the cron is too long (100000 characters; at most 65536)
+ValueError: dateblock(): Argument #1 ($cron) is not a valid cron: the cron is too long (more than 65536 characters)
+no exception
+ValueError: dateblock(): Argument #1 ($cron) is not a valid cron: the cron is too long (more than 65536 characters)
 ValueError: dateblock(): Argument #1 ($cron) is not a valid cron: there are too many fields; a crontab entry has 5 (minute, hour, day of month, month and day of week)
 RuntimeException: No moment in time matches this cron (none in the next 400 years).
 TypeError: dateblock(): Argument #3 ($ref) must be of type DateTimeInterface|int|float|null, string given

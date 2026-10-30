@@ -219,6 +219,13 @@ napi_value CronAfter(napi_env env, napi_callback_info info)
    JsZone zone(env, argv[3]);
    try
    {
+      // A huge cron is only copied up to just past the longest one
+      // allowed; that is enough for it to be refused.  Node.js never cuts
+      // a character in half, so 4 bytes (the longest UTF-8 character) are
+      // asked for past the limit, so that more than the limit always
+      // arrives.
+      if (length > Date::T_CRON_LENGTH_MAX)
+         length = Date::T_CRON_LENGTH_MAX + 4;
       std::string cron(length + 1, '\0');
       if (napi_get_value_string_utf8(env, argv[1], &cron[0], cron.size(),
                                      &length) != napi_ok)

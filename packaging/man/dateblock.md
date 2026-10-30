@@ -66,10 +66,11 @@ with the command's exit code; see [RUNNING A COMMAND][].
   The day(s) of the month to unblock on (1-31).
 
   `-m`, `--month=`<MONTH>:
-  The month(s) to unblock on (1-12; Jan=1, ..., Dec=12).
+  The month(s) to unblock on (1-12, or Jan to Dec).
 
   `-w`, `--dow=`<DOW>:
-  The day(s) of the week to unblock on (0-6; Sun=0, ..., Sat=6).
+  The day(s) of the week to unblock on (0-6, or Sun to Sat; Sunday is 0 or
+  7).
 
   `-x`, `--drift=`<DRIFT>:
   Extra seconds to wait once the time is matched; see [DRIFTING][]. Use the
@@ -100,6 +101,14 @@ Every field (and every entry in a cron string) accepts:
   * `*`:
     any value. It must be on its own; `*,5` is not valid.
 
+The month and the day of the week can also be written as names, in any
+case: `Jan` to `Dec` and `Sun` to `Sat` (ie: `Mon-Fri` or `Jan,Jul`). A
+range of names can't go backwards: `Sat-Sun` is refused (write `Sat,Sun`
+or `Sat-7`), since it would otherwise mean every day of the week.
+
+As in crontab(5), a day of the week of `7` is Sunday too, so `Fri-7` is
+Friday to Sunday.
+
 These can be mixed when separated by commas, so `*/a,b,c-d,/e` is valid.
 However `x-y-z`, `/x/y`, `/x-y`, an unfinished `x-`, an empty entry
 (`5,,6`) and a `*` mixed with other entries are not. Every value
@@ -110,7 +119,7 @@ must be within the range of its field; `400-4000` never works for any field.
 The `--cron` string has up to 7 fields separated by white space:
 
     drift time ---------------------------------------------+
-    day of week (0 - 6) (Sunday=0) ----------------------+  |
+    day of week (0 - 7) (Sunday=0 or 7) -----------------+  |
     month (1 - 12) -----------------------------------+  |  |
     day of month (1 - 31) -------------------------+  |  |  |
     hour (0 - 23) ------------------------------+  |  |  |  |
@@ -126,9 +135,22 @@ An entry starting with a plus (`+`) jumps straight to the drift field, so
 `* /5 +60` is the same as `* /5 * * * * 60`. Nothing may follow the `+`
 entry.
 
+The crontab(5) shortcuts can stand for the whole string, with or without
+`--isc`. Without `--isc` a `+` drift may follow one (ie: `@daily +30`);
+nothing else may, and with `--isc` nothing may follow it at all (a crontab
+entry has no drift):
+
+  * `@hourly`: the start of every hour.
+  * `@daily` (or `@midnight`): every day at 00:00.
+  * `@weekly`: every Sunday at 00:00.
+  * `@monthly`: the 1st of every month at 00:00.
+  * `@yearly` (or `@annually`): every January 1st at 00:00.
+
+`@reboot` is refused, since it isn't a time.
+
 With `--isc` the string is a regular crontab(5) entry instead:
 
-    day of week (0 - 6) (Sunday=0) ----------+
+    day of week (0 - 7) (Sunday=0 or 7) -----+
     month (1 - 12) ----------------------+   |
     day of month (1 - 31) -----------+   |   |
     hour (0 - 23) ---------------+   |   |   |
@@ -225,6 +247,11 @@ Block until 20 seconds after 5 minutes past the hour:
 Block until 9:00 on weekdays, written as a regular crontab entry:
 
     $ dateblock -i -c "0 9 * * 1-5"
+    $ dateblock -i -c "0 9 * * Mon-Fri"
+
+Block until the next midnight, then 30 seconds more:
+
+    $ dateblock -c "@daily +30"
 
 Block until 9:00 in Tokyo, whatever timezone this computer is in:
 

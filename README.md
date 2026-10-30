@@ -67,8 +67,8 @@ __Allowed options__:
   -n [ --minute ] arg   Minute (0-59)
   -o [ --hour ] arg     Hour (0-23)
   -d [ --dom ] arg      Day of Month (1-31)
-  -m [ --month ] arg    Month (1-12) {Jan=1,...,Dec=12}
-  -w [ --dow ] arg      Day of Week (0-6) {Sun=0,...,Sat=6}
+  -m [ --month ] arg    Month (1-12 or Jan-Dec)
+  -w [ --dow ] arg      Day of Week (0-6 or Sun-Sat; Sun=0 or 7)
   -c [ --cron ] arg     Cron string formatting
   -x [ --drift ] arg    Additional drift time (in seconds).
   -z [ --timezone ] arg Timezone to read the schedule in (ie:
@@ -84,6 +84,10 @@ A variety of syntax is accepted by this tool such as:
   */x (or /x)     (Modulus)   where 'x' is represented numerically.
   x-y (or y-x)    (Range)     where 'x' and 'y' are are represented numerically.
   x,y             (Separator) where 'x' and 'y' are are represented numerically.
+  Mon-Fri, Jan    (Names)     the month and the day of the week can be written
+                              as names (Jan-Dec and Sun-Sat, in any case).
+  7               (Sunday)    as in crontab, a day of the week of 7 is Sunday
+                              too, so Fri-7 is Friday to Sunday.
 ```
 
 __Note__: With the exception of the drift option (+), all variations of the syntax
@@ -97,7 +101,7 @@ __Note__: With the exception of the drift option (+), all variations of the synt
 The __--cron__(__-c__) switch allows one to specify the standard cron formatting:
 ```
      drift time ----------------------------------------------+
-     day of week (0 - 6) (Sunday=0) -----------------------+  |
+     day of week (0 - 7) (Sunday=0 or 7) ------------------+  |
      month (1 - 12) ------------------------------------+  |  |
      day of month (1 - 31) --------------------------+  |  |  |
      hour (0 - 23) -------------------------------+  |  |  |  |
@@ -111,6 +115,16 @@ Substitute an asterisk (*) as a placeholder for arguments you are not
 interested in. Asterisks are automatically placed in strings missing all 6
 arguments (separated by white space).
 
+The crontab shortcuts work too (with or without `--isc`).  Without `--isc`
+one can be followed by a drift (ie: `@daily +30`):
+```
+  @hourly                 the start of every hour
+  @daily (or @midnight)   every day at 00:00
+  @weekly                 every Sunday at 00:00
+  @monthly                the 1st of every month at 00:00
+  @yearly (or @annually)  every January 1st at 00:00
+```
+
 The __--isc__ (__-i__) switch makes the cron interpretation equivalent to
 what it is today (ISC stands for Internet Systems Consortium). Hence:
 ```
@@ -120,7 +134,7 @@ what it is today (ISC stands for Internet Systems Consortium). Hence:
      |  +----------------------- hour (0 - 23)
      |  |  +----------------- day of month (1 - 31)
      |  |  |  +----------- month (1 - 12)
-     |  |  |  |  +----- day of week (0 - 6) (Sunday=0)
+     |  |  |  |  +----- day of week (0 - 7) (Sunday=0 or 7)
      |  |  |  |  |
      -  -  -  -  -
      *  *  *  *  *

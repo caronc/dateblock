@@ -20,6 +20,7 @@
 #include <datetime.h>
 
 #include <math.h>
+#include <string.h>
 #include <limits>
 #include <new>
 #include <stdexcept>
@@ -284,8 +285,8 @@ static void SetCronError()
 // The next match for a naive reference (or none), read in the computer's
 // own timezone.  Returns a naive datetime and sets 'when', or NULL with
 // an error set.
-static PyObject *CronLocal(const char *cron, bool isc, PyObject *ref,
-                           time_t &when)
+static PyObject *CronLocal(const char *cron, size_t length, bool isc,
+                           PyObject *ref, time_t &when)
 {
    // A C++ exception must never reach Python; it would abort the
    // interpreter.  Even creating a Date can throw (if the current time
@@ -297,7 +298,7 @@ static PyObject *CronLocal(const char *cron, bool isc, PyObject *ref,
       {
          return NULL;
       }
-      Date dObjFinish(dObjStart.Cron(cron, isc));
+      Date dObjFinish(dObjStart.Cron(std::string(cron, length), isc));
       when = dObjFinish.Time();
       return DateToPy(dObjFinish);
    }
@@ -311,8 +312,8 @@ static PyObject *CronLocal(const char *cron, bool isc, PyObject *ref,
 // The next match for a timezone aware datetime, read in its own timezone.
 // Returns an aware datetime (with the same tzinfo) and sets 'when', or
 // NULL with an error set.
-static PyObject *CronInZone(const char *cron, bool isc, PyObject *ref,
-                            PyObject *tzinfo, time_t &when)
+static PyObject *CronInZone(const char *cron, size_t length, bool isc,
+                            PyObject *ref, PyObject *tzinfo, time_t &when)
 {
    PyObject *ts = PyObject_CallMethod(ref, "timestamp", NULL);
    if (ts == NULL)
@@ -331,7 +332,7 @@ static PyObject *CronInZone(const char *cron, bool isc, PyObject *ref,
    try
    {
       PyZone zone(tzinfo);
-      when = Date::CronAfter(epoch, cron, isc, zone);
+      when = Date::CronAfter(epoch, std::string(cron, length), isc, zone);
    }
    catch (...)
    {
@@ -422,19 +423,42 @@ PyDoc_STRVAR(dateblock_doc,
 // Pass block=False to just perform the calculation.
 static PyObject *dateblock(PyObject *self, PyObject *args, PyObject *kwds)
 {
-   const char *str = NULL;
+   PyObject *cron = NULL;
    int block = 1;
    int isc = 0;
    PyObject *pDateObj = NULL;
 
    static const char *kwlist[] = {"cron", "block", "ref", "isc", NULL};
 
-   if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|pOp",
-            const_cast<char **>(kwlist), &str, &block, &pDateObj, &isc))
+   if (!PyArg_ParseTupleAndKeywords(args, kwds, "U|pOp",
+            const_cast<char **>(kwlist), &cron, &block, &pDateObj, &isc))
    {
       // Couldn't parse content
       return NULL;
    }
+
+   // Only the start of a huge cron is turned into UTF-8 (just past the
+   // longest one allowed); that is enough for it to be refused, without
+   // first building a UTF-8 copy of all of it
+   PyObject *head = PyUnicode_Substring(cron, 0, Date::T_CRON_LENGTH_MAX + 1);
+   if (head == NULL)
+   {
+      return NULL;
+   }
+   Py_ssize_t size = 0;
+   const char *str = PyUnicode_AsUTF8AndSize(head, &size);
+   if (str == NULL)
+   {
+      Py_DECREF(head);
+      return NULL;
+   }
+   if (memchr(str, '\0', size) != NULL)
+   {
+      Py_DECREF(head);
+      PyErr_SetString(PyExc_ValueError, "embedded null character");
+      return NULL;
+   }
+   size_t length = static_cast<size_t>(size);
 
    // Work out the moment (and build the result first; a moment Python
    // can't represent, past the year 9999, raises right away instead of
@@ -444,18 +468,21 @@ static PyObject *dateblock(PyObject *self, PyObject *args, PyObject *kwds)
    PyObject *start = AwareRef(pDateObj, &tzinfo);
    if (start == NULL && PyErr_Occurred())
    {
+      Py_DECREF(head);
       return NULL;
    }
 
    PyObject *result;
    if (tzinfo != NULL)
    {
-      result = CronInZone(str, isc != 0, start, tzinfo, when);
+      result = CronInZone(str, length, isc != 0, start, tzinfo, when);
    }
    else
    {
-      result = CronLocal(str, isc != 0, start ? start : pDateObj, when);
+      result = CronLocal(str, length, isc != 0, start ? start : pDateObj,
+                         when);
    }
+   Py_DECREF(head);
    Py_XDECREF(start);
    Py_XDECREF(tzinfo);
    if (result == NULL)

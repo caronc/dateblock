@@ -76,8 +76,8 @@ static const Option OPTIONS[] = {
    {'n', "minute", true, "Minute (0-59)"},
    {'o', "hour", true, "Hour (0-23)"},
    {'d', "dom", true, "Day of Month (1-31)"},
-   {'m', "month", true, "Month (1-12) {Jan=1,...,Dec=12}"},
-   {'w', "dow", true, "Day of Week (0-6) {Sun=0,...,Sat=6}"},
+   {'m', "month", true, "Month (1-12 or Jan-Dec)"},
+   {'w', "dow", true, "Day of Week (0-6 or Sun-Sat; Sun=0 or 7)"},
    {'c', "cron", true, "Cron string formatting"},
    {'x', "drift", true, "Additional drift time (in seconds)."},
    {'z', "timezone", true, "Timezone to read the schedule in (ie:\n"
@@ -326,7 +326,15 @@ static void ProgramExamples()
      << " represented numerically." << endl
 
      << "  x,y             (Separator) where 'x' and 'y' are are"
-     << " represented numerically." << endl << endl;
+     << " represented numerically." << endl
+     << "  Mon-Fri, Jan    (Names)     the month and the day of the week can"
+     << " be written" << endl
+     << "                              as names (Jan-Dec and Sun-Sat, in any"
+     << " case)." << endl
+     << "  7               (Sunday)    as in crontab, a day of the week of 7 is"
+     << " Sunday" << endl
+     << "                              too, so Fri-7 is Friday to Sunday."
+     << endl << endl;
    cerr << " Note: All variations of the syntax mentioned above can be mixed"
      << " if separated" << endl << "       using the 'comma' (Separator)"
      << " operator.  ie: */a,b,c-d,/e is valid." << endl
@@ -341,7 +349,7 @@ static void ProgramExamples()
      <<  " formatting:" << endl;
    cerr
      << "     drift time ------------------------------------------+" << endl
-     << "     day of week (0 - 6) (Sunday=0) -------------------+  |" << endl
+     << "     day of week (0 - 7) (Sunday=0 or 7) --------------+  |" << endl
      << "     month (1 - 12) --------------------------------+  |  |" << endl
      << "     day of month (1 - 31) ----------------------+  |  |  |" << endl
      << "     hour (0 - 23) ---------------------------+  |  |  |  |" << endl
@@ -354,6 +362,15 @@ static void ProgramExamples()
      << " you are not" << endl
      << "  interested in. Asterixes are automatically placed in strings missing all 6"
      << endl << "  arguments (separated by white space)." << endl << endl;
+   cerr << "  The crontab shortcuts work too (with or without --isc)."
+     << "  Without --isc" << endl
+     << "  one can be followed by a drift (ie: '@daily +30'):" << endl
+     << "    @hourly                 the start of every hour" << endl
+     << "    @daily (or @midnight)   every day at 00:00" << endl
+     << "    @weekly                 every Sunday at 00:00" << endl
+     << "    @monthly                the 1st of every month at 00:00" << endl
+     << "    @yearly (or @annually)  every January 1st at 00:00"
+     << endl << endl;
    cerr << "Drifts: " << endl
         << endl << "  Drifting is an option that allows you to adjust the calculated results by some"
         << endl << "   additional time.  Lets say you wanted the application to wake up on the 1st"
@@ -394,6 +411,11 @@ static void ProgramExamples()
      << endl << "    as such:" << endl
      << "          1. $> dateblock -n 5" << endl
      << "          2. $> dateblock -c \"* 5 * * * *\""
+     << endl << endl;
+
+   cerr << "$> dateblock -o 9 -w Mon-Fri" << endl
+     << "    This would block until 9:00 on the next weekday. As a regular"
+     << endl << "    crontab entry: $> dateblock -i -c \"0 9 * * Mon-Fri\""
      << endl << endl;
 
    cerr << "$> dateblock -z Asia/Tokyo -c \"0 0 9\"" << endl

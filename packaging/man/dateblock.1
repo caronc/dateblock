@@ -43,9 +43,9 @@ Given a \fICOMMAND\fR, \fBdateblock\fR runs it once the time is reached and exit
 .P
 \fB\-d\fR, \fB\-\-dom=\fR\fIDOM\fR: The day(s) of the month to unblock on (1\-31)\.
 .P
-\fB\-m\fR, \fB\-\-month=\fR\fIMONTH\fR: The month(s) to unblock on (1\-12; Jan=1, \|\.\|\.\|\., Dec=12)\.
+\fB\-m\fR, \fB\-\-month=\fR\fIMONTH\fR: The month(s) to unblock on (1\-12, or Jan to Dec)\.
 .P
-\fB\-w\fR, \fB\-\-dow=\fR\fIDOW\fR: The day(s) of the week to unblock on (0\-6; Sun=0, \|\.\|\.\|\., Sat=6)\.
+\fB\-w\fR, \fB\-\-dow=\fR\fIDOW\fR: The day(s) of the week to unblock on (0\-6, or Sun to Sat; Sunday is 0 or 7)\.
 .P
 \fB\-x\fR, \fB\-\-drift=\fR\fIDRIFT\fR: Extra seconds to wait once the time is matched; see \fIDRIFTING\fR\. Use the 7th field (or \fB+\fR\fIDRIFT\fR) instead when using \fB\-\-cron\fR\.
 .P
@@ -73,13 +73,17 @@ both \fIx\fR and \fIy\fR (separator)\.
 \fB*\fR
 any value\. It must be on its own; \fB*,5\fR is not valid\.
 .P
+The month and the day of the week can also be written as names, in any case: \fBJan\fR to \fBDec\fR and \fBSun\fR to \fBSat\fR (ie: \fBMon\-Fri\fR or \fBJan,Jul\fR)\. A range of names can't go backwards: \fBSat\-Sun\fR is refused (write \fBSat,Sun\fR or \fBSat\-7\fR), since it would otherwise mean every day of the week\.
+.P
+As in crontab(5), a day of the week of \fB7\fR is Sunday too, so \fBFri\-7\fR is Friday to Sunday\.
+.P
 These can be mixed when separated by commas, so \fB*/a,b,c\-d,/e\fR is valid\. However \fBx\-y\-z\fR, \fB/x/y\fR, \fB/x\-y\fR, an unfinished \fBx\-\fR, an empty entry (\fB5,,6\fR) and a \fB*\fR mixed with other entries are not\. Every value must be within the range of its field; \fB400\-4000\fR never works for any field\.
 .SH "CRON STRING"
 The \fB\-\-cron\fR string has up to 7 fields separated by white space:
 .IP "" 4
 .nf
 drift time \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+
-day of week (0 \- 6) (Sunday=0) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+  |
+day of week (0 \- 7) (Sunday=0 or 7) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+  |
 month (1 \- 12) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+  |  |
 day of month (1 \- 31) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+  |  |  |
 hour (0 \- 23) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+  |  |  |  |
@@ -94,10 +98,25 @@ Missing fields at the end are filled in with \fB*\fR, so \fB* 5\fR is the same a
 .P
 An entry starting with a plus (\fB+\fR) jumps straight to the drift field, so \fB* /5 +60\fR is the same as \fB* /5 * * * * 60\fR\. Nothing may follow the \fB+\fR entry\.
 .P
+The crontab(5) shortcuts can stand for the whole string, with or without \fB\-\-isc\fR\. Without \fB\-\-isc\fR a \fB+\fR drift may follow one (ie: \fB@daily +30\fR); nothing else may, and with \fB\-\-isc\fR nothing may follow it at all (a crontab entry has no drift):
+.IP "\(bu" 4
+\fB@hourly\fR: the start of every hour\.
+.IP "\(bu" 4
+\fB@daily\fR (or \fB@midnight\fR): every day at 00:00\.
+.IP "\(bu" 4
+\fB@weekly\fR: every Sunday at 00:00\.
+.IP "\(bu" 4
+\fB@monthly\fR: the 1st of every month at 00:00\.
+.IP "\(bu" 4
+\fB@yearly\fR (or \fB@annually\fR): every January 1st at 00:00\.
+.IP "" 0
+.P
+\fB@reboot\fR is refused, since it isn't a time\.
+.P
 With \fB\-\-isc\fR the string is a regular crontab(5) entry instead:
 .IP "" 4
 .nf
-day of week (0 \- 6) (Sunday=0) \-\-\-\-\-\-\-\-\-\-+
+day of week (0 \- 7) (Sunday=0 or 7) \-\-\-\-\-+
 month (1 \- 12) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+   |
 day of month (1 \- 31) \-\-\-\-\-\-\-\-\-\-\-+   |   |
 hour (0 \- 23) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+   |   |   |
@@ -193,6 +212,14 @@ Block until 9:00 on weekdays, written as a regular crontab entry:
 .IP "" 4
 .nf
 $ dateblock \-i \-c "0 9 * * 1\-5"
+$ dateblock \-i \-c "0 9 * * Mon\-Fri"
+.fi
+.IP "" 0
+.P
+Block until the next midnight, then 30 seconds more:
+.IP "" 4
+.nf
+$ dateblock \-c "@daily +30"
 .fi
 .IP "" 0
 .P

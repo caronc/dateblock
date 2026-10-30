@@ -19,6 +19,7 @@
 
 #include <iostream>
 #include <stdexcept>
+#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -784,10 +785,15 @@ static bool Behaves(const Date& start, const string& cron, bool isISC)
                got.Time())
          problem = "gave a different time through the timezone hook";
    }
-   catch (const invalid_argument&)
+   catch (const invalid_argument& e)
    {
       if (valid)
          problem = "was accepted by CronValid() but did not parse";
+      // The message only ever holds printable ASCII; anything else from
+      // the input is written as \xNN
+      for (const char *c = e.what(); *c && problem == NULL; c++)
+         if (*c < 0x20 || *c > 0x7e)
+            problem = "gave a message with a character that isn't plain ASCII";
    }
    catch (const runtime_error&)
    {
@@ -882,7 +888,9 @@ static int CheckParser()
       {"0 0 24", false, false}, {"0 0 0 0", false, false},
       {"0 0 0 32", false, false}, {"0 0 0 31", false, true},
       {"0 0 0 1 0", false, false}, {"0 0 0 1 13", false, false},
-      {"0 0 0 * * 7", false, false}, {"0 0 0 * * 6", false, true},
+      {"0 0 0 * * 8", false, false}, {"0 0 0 * * 6", false, true},
+      {"0 0 0 * * 7", false, true}, {"0 0 0 * * 0-7", false, true},
+      {"0 0 0 * * */7", false, true}, {"0 0 0 * * */8", false, false},
       // Drifts
       {"* * * * * * 2147483647", false, true},
       {"* * * * * * 2147483648", false, false},
@@ -898,7 +906,8 @@ static int CheckParser()
       {"+5", true, false}, {"60 * * * *", true, false},
       {"*/5 * * * *", true, true}, {"0 0 */5 * *", true, true},
       {"0 0 0 * *", true, false}, {"0 0 * 0 *", true, false},
-      {"0 0 * * 7", true, false}, {"0 0 *,13 * 1", true, false},
+      {"0 0 * * 8", true, false}, {"0 0 *,13 * 1", true, false},
+      {"0 0 * * 7", true, true},
       {"1-10/3 * * * *", true, true}};
 
    Date start(2025, 1, 15, 3, 10, 0);
@@ -990,12 +999,14 @@ static int CheckParser()
 
    // Random junk, and valid crons with a character or three changed:
    // each one is either worked out or refused cleanly
-   const char letters[] = "0123456789*/-,+ \t\n*/-,+5,0-1/\0\xff\xe9" "a!";
+   const char letters[] = "0123456789*/-,+ \t\n*/-,+5,0-1/\0\xff\xe9" "a!"
+                          "@MonFriJaDcly";
    const string alphabet(letters, sizeof(letters) - 1);
    const char *seeds[] = {
       "0 */5 3,4 1-15 * 1-5 +30", "/5 * 3,4", "* 5 +20,40", "0 0 0 29 2 1",
       "0 0 12 13 * 5", "1-59/2 0-23/3 * * * * 0-9999", "*/10 +60",
-      "0 9 * * 1-5", "*/15 0-3 1,15 */2 *", "30 2 29 2 *"};
+      "0 9 * * 1-5", "*/15 0-3 1,15 */2 *", "30 2 29 2 *",
+      "0 9 * * Mon-Fri", "0 0 0 1 Jan,Jul", "@daily +30", "@hourly"};
    for (int round = 0; round < 40000; round++)
    {
       string cron;
@@ -1026,13 +1037,177 @@ static int CheckParser()
    return 0;
 }
 
+// Month and weekday names (ie: 'Mon-Fri', 'Jan') and crontab's shortcuts
+// (ie: '@daily') mean exactly the numbers they stand for
+static int CheckNamesAndShortcuts()
+{
+   // Exactly what is accepted (true) and refused (false)
+   struct Case { const char *cron; bool isISC; bool valid; };
+   const Case cases[] = {
+      // Names, in any case, wherever a number may go
+      {"0 0 0 * * Mon-Fri", false, true}, {"0 0 0 * * mon,WED,fRi", false, true},
+      {"0 0 0 * Jan-Mar", false, true}, {"0 0 0 1 Dec", false, true},
+      {"0 0 0 * * Mon-Fri/2", false, true}, {"0 0 0 * * 1-Fri", false, true},
+      {"0 0 0 * * Sun", false, true}, {"0 0 0 * * Sat", false, true},
+      {"0 0 0 * Jan-Dec/3", false, true}, {"0 9 * * Mon-Fri", true, true},
+      {"0 9 1 Jan,Jul *", true, true},
+      // Names that don't exist, or in the wrong place
+      {"0 0 0 * * Monday", false, false}, {"0 0 0 * * Mo", false, false},
+      {"0 0 0 * * Mon5", false, false}, {"0 0 0 * * 5Mon", false, false},
+      {"0 0 0 * * */Mon", false, false}, {"0 0 0 * * Mon-Fri/Tue", false, false},
+      {"0 0 0 * * Mon-", false, false}, {"0 0 0 * * -Mon", false, false},
+      {"0 0 0 * * Jan", false, false}, {"0 0 0 * Mon", false, false},
+      {"0 Mon", false, false}, {"Jan", false, false}, {"0 0 0 Jan", false, false},
+      {"* * * * * * Mon", false, false}, {"0 0 0 * * Mon\xff", false, false},
+      // A backwards range of names is refused (numbers are still swapped)
+      {"0 0 0 * * Sat-Sun", false, false}, {"0 0 0 * * 6-Sun", false, false},
+      {"0 0 0 * * Sat-0", false, false}, {"0 0 0 * Dec-Jan", false, false},
+      {"0 0 0 * * 6-0", false, true}, {"0 0 0 * * Mon-Mon", false, true},
+      // Shortcuts, in any case
+      {"@yearly", false, true}, {"@annually", false, true},
+      {"@monthly", false, true}, {"@weekly", false, true},
+      {"@daily", false, true}, {"@midnight", false, true},
+      {"@hourly", false, true}, {"@DAILY", false, true},
+      {"  @daily  ", false, true}, {"@hourly", true, true},
+      {"@weekly", true, true}, {"@yearly", true, true},
+      // Only a drift may follow one (and not in a crontab entry)
+      {"@daily +30", false, true}, {"@daily +0-9999", false, true},
+      {"@daily +30", true, false}, {"@daily 5", false, false},
+      {"@daily *", false, false}, {"@daily +30 5", false, false},
+      {"@daily @hourly", false, false}, {"@daily +", false, false},
+      {"@hourly 5", true, false},
+      // Shortcuts that don't exist, or not first
+      {"@", false, false}, {"@reboot", false, false}, {"@reboot", true, false},
+      {"@day", false, false}, {"@dailyx", false, false},
+      {"@daily,@hourly", false, false}, {"0 @daily", false, false},
+      {"+5 @daily", false, false}, {"0 9 * * @daily", true, false},
+      {"0 @", false, false}};
+
+   Date start(2025, 1, 15, 3, 10, 0);
+   for (unsigned i = 0; i < sizeof(cases)/sizeof(cases[0]); i++)
+   {
+      if (Date::CronValid(cases[i].cron, cases[i].isISC) != cases[i].valid)
+      {
+         cerr << "FATAL: '" << Shown(cases[i].cron) << "'"
+              << (cases[i].isISC ? " (isc)" : "") << " should be "
+              << (cases[i].valid ? "accepted" : "refused") << endl;
+         return 1;
+      }
+      if (!Behaves(start, cases[i].cron, cases[i].isISC))
+         return 1;
+   }
+
+   // The times they work out to (Wednesday 2025-01-15 03:10:00)
+   if (!Expect("@hourly", false, 2025, 1, 15, 3, 10, 0, "2025-01-15 04:00:00") ||
+       !Expect("@daily", false, 2025, 1, 15, 3, 10, 0, "2025-01-16 00:00:00") ||
+       !Expect("@weekly", false, 2025, 1, 15, 3, 10, 0, "2025-01-19 00:00:00") ||
+       !Expect("@monthly", false, 2025, 1, 15, 3, 10, 0, "2025-02-01 00:00:00") ||
+       !Expect("@yearly", false, 2025, 1, 15, 3, 10, 0, "2026-01-01 00:00:00") ||
+       !Expect("@daily +30", false, 2025, 1, 15, 3, 10, 0, "2025-01-16 00:00:30") ||
+       !Expect("@hourly", true, 2025, 1, 15, 3, 10, 0, "2025-01-15 04:00:00") ||
+       !Expect("@weekly", true, 2025, 1, 15, 3, 10, 0, "2025-01-19 00:00:00") ||
+       !Expect("0 0 9 * * Mon-Fri", false, 2025, 1, 15, 3, 10, 0, "2025-01-15 09:00:00") ||
+       !Expect("0 0 9 * * Mon-Fri", false, 2025, 1, 17, 9, 0, 0, "2025-01-20 09:00:00") ||
+       !Expect("0 9 * * Sat,Sun", true, 2025, 1, 15, 3, 10, 0, "2025-01-18 09:00:00") ||
+       !Expect("0 0 0 1 Mar", false, 2025, 1, 15, 3, 10, 0, "2025-03-01 00:00:00") ||
+       !Expect("0 0 1 Jul *", true, 2025, 1, 15, 3, 10, 0, "2025-07-01 00:00:00"))
+      return 1;
+
+   // Each one gives the same times as the numbers it stands for, from many
+   // starting points (both formats)
+   struct Same { const char *named; const char *numbers; bool isISC; };
+   const Same same[] = {
+      {"@yearly", "0 0 0 1 1", false}, {"@annually", "0 0 0 1 1", false},
+      {"@monthly", "0 0 0 1", false}, {"@weekly", "0 0 0 * * 0", false},
+      {"@daily", "0 0 0", false}, {"@midnight", "0 0 0", false},
+      {"@hourly", "0 0", false}, {"@daily +45", "0 0 0 +45", false},
+      {"@yearly", "0 0 1 1 *", true}, {"@monthly", "0 0 1 * *", true},
+      {"@weekly", "0 0 * * 0", true}, {"@daily", "0 0 * * *", true},
+      {"@hourly", "0 * * * *", true},
+      {"0 0 9 * * Mon-Fri", "0 0 9 * * 1-5", false},
+      {"0 0 9 * * sun,SAT", "0 0 9 * * 0,6", false},
+      {"0 0 0 * Jan-Dec/3 Fri", "0 0 0 * 1-12/3 5", false},
+      {"0 0 13 * Feb-Apr Tue-Thu", "0 0 13 * 2-4 2-4", false},
+      {"30 4 1,15 * Fri", "30 4 1,15 * 5", true},
+      {"0 0 * Jan,Jun,Dec Mon-Wed", "0 0 * 1,6,12 1-3", true},
+      // 7 is Sunday too, as in crontab
+      {"0 0 9 * * 7", "0 0 9 * * 0", false}, {"0 9 * * 7", "0 9 * * 0", true},
+      {"0 0 9 * * Fri-7", "0 0 9 * * 0,5,6", false},
+      {"0 0 9 * * 5-7", "0 0 9 * * Fri,Sat,Sun", false},
+      {"0 0 9 * * 0-7", "0 0 9", false}, {"0 0 9 * * */7", "0 0 9 * * 0", false},
+      {"0 0 9 * * 0,7", "0 0 9 * * 0", false},
+      {"0 9 1 * 7", "0 9 1 * 0", true}};
+   for (unsigned i = 0; i < sizeof(same)/sizeof(same[0]); i++)
+   {
+      Date from(2024, 2, 27, 23, 59, 59);
+      for (int step = 0; step < 200; step++)
+      {
+         Date a = from.Cron(same[i].named, same[i].isISC);
+         Date b = from.Cron(same[i].numbers, same[i].isISC);
+         if (a != b)
+         {
+            cerr << "FATAL: '" << same[i].named << "' gave " << a.Str()
+                 << " but '" << same[i].numbers << "' gave " << b.Str()
+                 << " (from " << from.Str() << ")" << endl;
+            return 1;
+         }
+         from = a;
+      }
+   }
+
+   // The separate field options take names too (ie: dateblock -w Mon-Fri)
+   if (start.Cron("0", "0", "9", "*", "*", "Mon-Fri") !=
+       start.Cron("0", "0", "9", "*", "*", "1-5") ||
+       !Date::CronValid("*", "*", "*", "*", "Jan", "*") ||
+       Date::CronValid("*", "Jan", "*", "*", "*", "*"))
+      return Fail("separate fields don't read names correctly");
+   return 0;
+}
+
+// Names, shortcuts and white space read the same whatever language the
+// computer is set to (ie: in Turkish, 'I' doesn't lower to 'i', and some
+// languages count bytes such as 0xe9 as letters)
+static int CheckAnyLanguage()
+{
+   const char *locales[] = {"tr_TR.UTF-8", "tr_TR.utf8", "tr_TR.ISO-8859-9",
+                            "tr_TR.iso88599", "tr_TR"};
+   int tried = 0;
+   for (unsigned i = 0; i < sizeof(locales)/sizeof(locales[0]); i++)
+   {
+      if (setlocale(LC_ALL, locales[i]) == NULL)
+         continue;
+      tried++;
+      Date start(2025, 1, 15, 3, 10, 0);
+      bool ok = Date::CronValid("@DAILY") && Date::CronValid("@MIDNIGHT") &&
+                Date::CronValid("0 0 0 * * FRI") &&
+                Date::CronValid("0 0 0 * * mon-FRI") &&
+                Date::CronValid("0 0 0 1 JUL,AUG") &&
+                Date::CronValid("0 9 * * WED,FRI", true) &&
+                !Date::CronValid("0 0 0 * * \xe9") &&
+                !Date::CronValid("0\xa0" "5") &&
+                start.Cron("0 0 9 * * FRI") == start.Cron("0 0 9 * * 5") &&
+                start.Cron("@MIDNIGHT") == start.Cron("0 0 0");
+      setlocale(LC_ALL, "C");
+      if (!ok)
+      {
+         cerr << "FATAL: names or shortcuts were misread in " << locales[i]
+              << endl;
+         return 1;
+      }
+   }
+   if (tried == 0)
+      cerr << "NOTE: no Turkish locale installed; CheckAnyLanguage() "
+              "skipped" << endl;
+   return 0;
+}
+
 // Bad crons are refused with a message saying which field is wrong and why
 static int CheckErrorMessages()
 {
    struct Case { const char *cron; bool isISC; const char *says; };
    const Case cases[] = {
       {"* 99", false, "minute '99': 99 is outside of 0-59"},
-      {"0 0 0 * * 7", false, "day of week '7': 7 is outside of 0-6"},
+      {"0 0 0 * * 8", false, "day of week '8': 8 is outside of 0-7"},
       {"0 0 0 0", false, "day of month '0': 0 is outside of 1-31"},
       {"* 5,,6", false, "minute '5,,6': an entry is empty"},
       {"* *,5", false, "minute '*,5': '*' can't be mixed"},
@@ -1049,7 +1224,25 @@ static int CheckErrorMessages()
       {"* * * * * * 0-2147483647", false, "drift '0-2147483647': it has too many values"},
       {"* \x01", false, "minute '\\x01': '\\x01' is not a number"},
       {"* * * * * *", true, "a crontab entry has 5"},
-      {"60 * * * *", true, "minute '60': 60 is outside of 0-59"}};
+      {"60 * * * *", true, "minute '60': 60 is outside of 0-59"},
+      {"* * * * * Monday", false, "day of week 'Monday': 'Monday' is not a name "
+                                 "(use Sun, Mon, Tue, Wed, Thu, Fri or Sat)"},
+      {"* * * * Sept", false, "month 'Sept': 'Sept' is not a name (use Jan, "
+                              "Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov or Dec)"},
+      {"* * * * * Sat-Sun", false, "day of week 'Sat-Sun': 'Sat-Sun' goes "
+                                   "backwards (list them instead, ie: 'Sat,Sun', or "
+                                   "use 7 for Sunday)"},
+      {"* Mon", false, "minute 'Mon': 'Mon' is not a number"},
+      {"@reboot", false, "'@reboot' is not a time"},
+      {"@often", false, "'@often' is not a shortcut (use @yearly"},
+      {"@daily 5", false, "only a drift (ie: '+20') may follow '@daily'"},
+      {"@daily +20", true, "nothing may follow '@daily'"},
+      {"0 @daily", false, "'@daily' must be the first entry"},
+      // Anything but printable ASCII is written as \xNN: UTF-8 (even cut
+      // in half by the 40 character limit) and text direction marks
+      {"* \xc3\xa9", false, "minute '\\xc3\\xa9': '\\xc3\\xa9' is not a number"},
+      {"* 5\xe2\x80\xae", false, "'\\xe2\\x80\\xae' is not understood"},
+      {"* \xc2\x9b", false, "minute '\\xc2\\x9b'"}};
 
    Date start(2025, 1, 15, 3, 10, 0);
    for (unsigned i = 0; i < sizeof(cases)/sizeof(cases[0]); i++)
@@ -1101,8 +1294,14 @@ static int CheckErrorMessages()
    {
       said = e.what();
    }
-   if (said != "the cron is too long (70000 characters; at most 65536)")
+   if (said != "the cron is too long (more than 65536 characters)")
       return Fail(("A cron over 64 KiB gave the wrong message: " + said).c_str());
+
+   // Exactly the longest cron is read; one byte more is refused
+   string longest = "0" + string(Date::T_CRON_LENGTH_MAX - 1, ' ');
+   if (!Date::CronValid(longest) || Date::CronValid(longest + " ") ||
+       Date::CronValid(longest + "\xc3\xa9"))
+      return Fail("the longest cron allowed is not exactly T_CRON_LENGTH_MAX");
    return 0;
 }
 
@@ -1490,8 +1689,9 @@ int main()
    if (CheckExtras() || CheckLeapYears() || CheckDayMatching() ||
        CheckUnsetFields() || CheckSteps() || CheckHardening() ||
        CheckDriftLists() || CheckDaylightSaving() || CheckTimeZones() ||
-       CheckParser() || CheckErrorMessages() || CheckEdges() ||
-       CheckWaiting())
+       CheckParser() || CheckNamesAndShortcuts() || CheckAnyLanguage() ||
+       CheckErrorMessages() ||
+       CheckEdges() || CheckWaiting())
       return 1;
    return 0;
 }

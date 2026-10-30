@@ -18,6 +18,7 @@
 #ifndef DATEBLOCK_DATE_H
 #define DATEBLOCK_DATE_H
 
+#include <stddef.h>
 #include <time.h>
 #include <string>
 #include <set>
@@ -57,6 +58,13 @@ class Date
      static const int T_DRIFT_MIN;
      static const int T_DRIFT_MAX;
      static const int T_NO_ENTRY;
+
+     // The longest cron string that is read; a longer one is refused
+     // before it is looked at.  Bindings can copy just the first
+     // T_CRON_LENGTH_MAX + 1 characters of a huge string: that is enough
+     // for it to be refused.  (The value is set here, so it adds nothing
+     // to the compiled library.)
+     static const std::size_t T_CRON_LENGTH_MAX = 65536;
 
      // ISC Cron Fields (5 of them)
      static const int ISC_CRON_FIELD_COUNT;
@@ -181,8 +189,10 @@ class Date
      //     Minute (0-59)
      //     Hour (0-23)
      //     DOM of Month (1-31)
-     //     Month (1-11) {Jan=1,...,Dec=12}
+     //     Month (1-12) {Jan=1,...,Dec=12}
      //     DOM of Week (0-6) {Sun=0,...,Sat=6}
+     //  The string versions also take names (Jan-Dec, Sun-Sat) and, for
+     //  a whole cron string, shortcuts such as '@daily'.
      //     Drift Offset identifies how many seconds to adjust
      //     the final results by.
      //  Returns a Date Object of the next moment in time

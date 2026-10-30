@@ -63,8 +63,30 @@ fi
 out=$("$DATEBLOCK" -t -c '* 99' 2>&1)
 [ $? -eq 1 ] || fail "a bad minute did not exit with 1"
 echo "$out" | grep -q "minute '99': 99 is outside of 0-59" || fail "a bad minute was not explained: $out"
-out=$("$DATEBLOCK" -t -w 7 2>&1)
-echo "$out" | grep -q "day of week '7': 7 is outside of 0-6" || fail "-w 7 was not explained: $out"
+out=$("$DATEBLOCK" -t -w 8 2>&1)
+[ $? -eq 1 ] || fail "-w 8 did not exit with 1"
+echo "$out" | grep -q "day of week '8': 8 is outside of 0-7" || fail "-w 8 was not explained: $out"
+
+# Month and weekday names, and shortcuts such as @daily, mean the numbers
+# they stand for
+block_until() { "$DATEBLOCK" -t "$@" | grep '^Block Until'; }
+same() {
+   [ -n "$1" ] && [ "$1" = "$2" ] || fail "$3 gave '$1', not '$2'"
+}
+same "$(block_until -c @daily)" "$(block_until -c '0 0 0')" "@daily"
+same "$(block_until -c @hourly)" "$(block_until -c '0 0')" "@hourly"
+same "$(block_until -i -c @weekly)" "$(block_until -i -c '0 0 * * 0')" "-i @weekly"
+same "$(block_until -o 9 -w Mon-Fri)" "$(block_until -o 9 -w 1-5)" "-w Mon-Fri"
+same "$(block_until -c '0 0 0 1 Jul')" "$(block_until -c '0 0 0 1 7')" "Jul"
+out=$("$DATEBLOCK" -t -c '@reboot' 2>&1)
+[ $? -eq 1 ] || fail "@reboot did not exit with 1"
+echo "$out" | grep -q "'@reboot' is not a time" || fail "@reboot was not explained: $out"
+out=$("$DATEBLOCK" -t -i -c '@daily +30' 2>&1)
+[ $? -eq 1 ] || fail "-i '@daily +30' did not exit with 1"
+echo "$out" | grep -q "nothing may follow '@daily'" || fail "-i '@daily +30' was not explained: $out"
+out=$("$DATEBLOCK" -t -w Sat-Sun 2>&1)
+[ $? -eq 1 ] || fail "-w Sat-Sun did not exit with 1"
+echo "$out" | grep -q "'Sat-Sun' goes backwards" || fail "-w Sat-Sun was not explained: $out"
 
 # '*' mixed into a list is refused
 "$DATEBLOCK" -t -c '0 *,5' >/dev/null 2>&1
