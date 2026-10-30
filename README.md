@@ -336,6 +336,33 @@ A few things worth knowing:
 - While blocking, other Python threads keep running and Ctrl-C
   (`KeyboardInterrupt`) works as expected.
 
+With asyncio, use `await dateblock.wait(...)` instead.  It takes the same
+`cron`, `ref` and `isc` arguments, returns the same `datetime`, and lets
+your other tasks keep running while it waits (no thread needed):
+```python
+import asyncio
+import dateblock
+
+async def main():
+    # Wait for the next 20 minute mark
+    result = await dateblock.wait("* /20")
+    print("Unblocked at %s" % result.strftime("%Y-%m-%d %H:%M:%S"))
+
+    # Stop waiting early: give up after 10 seconds
+    try:
+        await asyncio.wait_for(dateblock.wait("0 0 9"), 10)
+    except asyncio.TimeoutError:
+        print("Gave up waiting")
+
+asyncio.run(main())
+```
+
+- Cancelling the task (or a timeout, as above) stops the wait.
+- A long wait checks the real clock once a minute, so it still ends on
+  time if the computer sleeps or the clock is changed.  That costs very
+  little, but if you keep thousands of waits going at once, prefer one
+  task that waits and then hands the work out.
+
 ### DateBlock PHP Bindings
 The PHP extension adds a single `dateblock()` function that works the same
 way:

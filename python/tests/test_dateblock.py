@@ -15,12 +15,14 @@
 # You should have received a copy of the GNU General Public License along with
 # this program; if not, see <https://www.gnu.org/licenses/>.
 """Tests for the dateblock Python module (run with: python3 -m unittest)."""
+import asyncio
 import locale
 import os
 import random
 import time as _time
 import tracemalloc
 import unittest
+from unittest import mock
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
 
 import dateblock
@@ -604,6 +606,140 @@ class DateblockTests(unittest.TestCase):
         self.assertEqual(dateblock.SEC_MAX, 59)
         self.assertEqual(dateblock.DOW_MIN, 0)
         self.assertEqual(dateblock.MONTH_MAX, 12)
+
+
+class WaitTests(unittest.TestCase):
+    """await dateblock.wait(...), the asyncio version."""
+
+    def test_wait_returns_what_dateblock_works_out(self):
+        for cron, ref, isc in (("0 0 9", datetime(2025, 1, 1), False),
+                               ("0 9 * * 1-5", 999434323, True),
+                               ("@daily +30", date(2024, 2, 28), False)):
+            with self.subTest(cron=cron):
+                self.assertEqual(
+                    asyncio.run(dateblock.wait(cron, ref=ref, isc=isc)),
+                    db(cron, ref=ref, isc=isc, block=False))
+
+    def test_wait_keeps_the_reference_timezone(self):
+        plus14 = timezone(timedelta(hours=14))
+        result = asyncio.run(dateblock.wait("/1", ref=datetime.now(plus14)))
+        self.assertIs(result.tzinfo, plus14)
+
+    def test_wait_wakes_right_on_the_second(self):
+        # It must never wake early; a busy computer may take a moment longer
+        target = int(_time.time()) + 3
+        result = asyncio.run(dateblock.wait("/1", ref=target - 1))
+        woke = _time.time()
+        self.assertEqual(result, datetime.fromtimestamp(target))
+        self.assertGreaterEqual(woke, target)
+        self.assertLess(woke - target, 2.0)
+
+    def _woke_at(self, cron, ref, start):
+        """Run wait() on a fake clock that starts at 'start'.
+
+        - Returns (result, the fake time when the wait ended).
+        """
+        now = [start]
+
+        async def sleep(seconds):
+            now[0] += seconds
+
+        with mock.patch.object(dateblock._wait.time, "time", lambda: now[0]), \
+                mock.patch.object(dateblock._wait.asyncio, "sleep", sleep):
+            result = asyncio.run(dateblock.wait(cron, ref=ref))
+        return result, now[0]
+
+    # New York, 2025-11-02: the clocks go back at 02:00 EDT, so 01:30
+    # happens twice (05:30 UTC, then 06:30 UTC).  From 01:45 EDT the next
+    # 01:30 is the second one.
+    FIRST_0130 = 1762061400
+    SECOND_0130 = FIRST_0130 + 3600
+
+    @needs_zoneinfo
+    def test_wait_ends_at_the_repeated_hour_in_a_zone(self):
+        zone = ZoneInfo("America/New_York")
+        start = self.FIRST_0130 + 15 * 60
+        result, woke = self._woke_at(
+            "0 30 1", datetime.fromtimestamp(start, zone), start)
+        self.assertEqual(result.timestamp(), self.SECOND_0130)
+        self.assertEqual(woke, self.SECOND_0130)
+
+    @unittest.skipUnless(hasattr(_time, "tzset"), "needs time.tzset()")
+    def test_wait_ends_at_the_repeated_hour_in_local_time(self):
+        # A naive result can't say which 01:30 it is; wait() must still
+        # end at the second one
+        saved = os.environ.get("TZ")
+        try:
+            os.environ["TZ"] = "America/New_York"
+            _time.tzset()
+            # Small systems may have no timezone data for it
+            if (_time.localtime(self.FIRST_0130).tm_isdst != 1 or
+                    _time.localtime(self.SECOND_0130).tm_isdst != 0):
+                self.skipTest("no timezone data for America/New_York")
+            start = self.FIRST_0130 + 15 * 60
+            result, woke = self._woke_at("0 30 1", start, start)
+        finally:
+            if saved is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = saved
+            _time.tzset()
+        self.assertEqual(result, datetime(2025, 11, 2, 1, 30))
+        self.assertEqual(woke, self.SECOND_0130)
+
+    def test_other_tasks_run_while_waiting(self):
+        # The wait is 2-3 seconds away; this task keeps ticking until it
+        # ends.  A wait that blocked the loop would leave only one tick.
+        async def ticks_while_waiting():
+            waiting = asyncio.ensure_future(
+                dateblock.wait("/1", ref=int(_time.time()) + 2))
+            ticks = 0
+            while not waiting.done():
+                await asyncio.sleep(0.1)
+                ticks += 1
+            await waiting
+            return ticks
+
+        self.assertGreaterEqual(asyncio.run(ticks_while_waiting()), 10)
+
+    def test_cancelling_stops_the_wait(self):
+        async def far_away():
+            # At least a day away; give up after a moment
+            tomorrow = datetime.now() + timedelta(days=1)
+            await asyncio.wait_for(dateblock.wait("0 0 9", ref=tomorrow), 0.2)
+
+        start = _time.monotonic()
+        with self.assertRaises(asyncio.TimeoutError):
+            asyncio.run(far_away())
+        self.assertLess(_time.monotonic() - start, 2)
+
+    def test_bad_cron_raises_the_same_errors(self):
+        for cron, error in (("* 99", SyntaxError), ("0 0 0 31 2 *", ValueError),
+                            (b"0 0 9", TypeError), ("0\x00", ValueError)):
+            with self.subTest(cron=cron):
+                with self.assertRaises(error):
+                    asyncio.run(dateblock.wait(cron))
+
+    def test_long_wait_follows_the_real_clock(self):
+        # A wait of up to a year sleeps at most a minute at a time.  The
+        # clock then jumps past the moment (ie: the computer slept), and
+        # the wait ends on its next check instead of sleeping on.
+        start = 1750000000  # mid June 2025, months from a new year
+        now = [start]
+        slept = []
+
+        async def sleep(seconds):
+            slept.append(seconds)
+            now[0] += seconds + 400 * 86400
+
+        when = db("@yearly", ref=start, block=False)
+        with mock.patch.object(dateblock._wait.time, "time", lambda: now[0]), \
+                mock.patch.object(dateblock._wait.asyncio, "sleep", sleep):
+            result = asyncio.run(dateblock.wait("@yearly", ref=start))
+
+        self.assertEqual(result, when)
+        self.assertEqual(len(slept), 1)
+        self.assertLessEqual(slept[0], 60)
 
 
 if __name__ == '__main__':

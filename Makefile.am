@@ -62,6 +62,7 @@ EXTRA_DIST = \
 	MANIFEST.in \
 	python/_dateblock.cpp \
 	python/dateblock/__init__.py \
+	python/dateblock/_wait.py \
 	python/tests/test_dateblock.py \
 	composer.json \
 	package.json \

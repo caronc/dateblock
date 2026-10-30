@@ -419,24 +419,12 @@ PyDoc_STRVAR(dateblock_doc,
 "in that same timezone.  Anything else uses this computer's timezone and\n"
 "returns a naive datetime.  Either way it unblocks at that exact moment.");
 
-// Block for a specified cron period and return the date calculated.
-// Pass block=False to just perform the calculation.
-static PyObject *dateblock(PyObject *self, PyObject *args, PyObject *kwds)
+// Works out the next match of 'cron' (a str) after 'ref' (or now).
+// Returns the datetime to give back and sets 'when' to that moment, or
+// returns NULL with an error set.
+static PyObject *NextMatch(PyObject *cron, PyObject *ref, bool isc,
+                           time_t &when)
 {
-   PyObject *cron = NULL;
-   int block = 1;
-   int isc = 0;
-   PyObject *pDateObj = NULL;
-
-   static const char *kwlist[] = {"cron", "block", "ref", "isc", NULL};
-
-   if (!PyArg_ParseTupleAndKeywords(args, kwds, "U|pOp",
-            const_cast<char **>(kwlist), &cron, &block, &pDateObj, &isc))
-   {
-      // Couldn't parse content
-      return NULL;
-   }
-
    // Only the start of a huge cron is turned into UTF-8 (just past the
    // longest one allowed); that is enough for it to be refused, without
    // first building a UTF-8 copy of all of it
@@ -460,12 +448,8 @@ static PyObject *dateblock(PyObject *self, PyObject *args, PyObject *kwds)
    }
    size_t length = static_cast<size_t>(size);
 
-   // Work out the moment (and build the result first; a moment Python
-   // can't represent, past the year 9999, raises right away instead of
-   // after sleeping until then)
-   time_t when = 0;
    PyObject *tzinfo = NULL;
-   PyObject *start = AwareRef(pDateObj, &tzinfo);
+   PyObject *start = AwareRef(ref, &tzinfo);
    if (start == NULL && PyErr_Occurred())
    {
       Py_DECREF(head);
@@ -475,16 +459,41 @@ static PyObject *dateblock(PyObject *self, PyObject *args, PyObject *kwds)
    PyObject *result;
    if (tzinfo != NULL)
    {
-      result = CronInZone(str, length, isc != 0, start, tzinfo, when);
+      result = CronInZone(str, length, isc, start, tzinfo, when);
    }
    else
    {
-      result = CronLocal(str, length, isc != 0, start ? start : pDateObj,
-                         when);
+      result = CronLocal(str, length, isc, start ? start : ref, when);
    }
    Py_DECREF(head);
    Py_XDECREF(start);
    Py_XDECREF(tzinfo);
+   return result;
+}
+
+// Block for a specified cron period and return the date calculated.
+// Pass block=False to just perform the calculation.
+static PyObject *dateblock(PyObject *self, PyObject *args, PyObject *kwds)
+{
+   PyObject *cron = NULL;
+   int block = 1;
+   int isc = 0;
+   PyObject *pDateObj = NULL;
+
+   static const char *kwlist[] = {"cron", "block", "ref", "isc", NULL};
+
+   if (!PyArg_ParseTupleAndKeywords(args, kwds, "U|pOp",
+            const_cast<char **>(kwlist), &cron, &block, &pDateObj, &isc))
+   {
+      // Couldn't parse content
+      return NULL;
+   }
+
+   // Work out the moment (and build the result first; a moment Python
+   // can't represent, past the year 9999, raises right away instead of
+   // after sleeping until then)
+   time_t when = 0;
+   PyObject *result = NextMatch(cron, pDateObj, isc != 0, when);
    if (result == NULL)
    {
       return NULL;
@@ -519,11 +528,41 @@ static PyObject *dateblock(PyObject *self, PyObject *args, PyObject *kwds)
    return result;
 }
 
+// Used by dateblock.wait(): the same as dateblock(cron, block=False, ...)
+// but returns (datetime, seconds since the epoch), so the waiting can be
+// done with asyncio without reading the moment back from the datetime
+// (a naive one can't tell the two copies of a repeated hour apart).
+static PyObject *next_match(PyObject *self, PyObject *args, PyObject *kwds)
+{
+   PyObject *cron = NULL;
+   int isc = 0;
+   PyObject *pDateObj = NULL;
+
+   static const char *kwlist[] = {"cron", "ref", "isc", NULL};
+
+   if (!PyArg_ParseTupleAndKeywords(args, kwds, "U|Op",
+            const_cast<char **>(kwlist), &cron, &pDateObj, &isc))
+   {
+      return NULL;
+   }
+
+   time_t when = 0;
+   PyObject *result = NextMatch(cron, pDateObj, isc != 0, when);
+   if (result == NULL)
+   {
+      return NULL;
+   }
+   return Py_BuildValue("(NL)", result, static_cast<long long>(when));
+}
+
 // Python Method Table.
 static PyMethodDef DateblockMethods[] =
 {
     {"dateblock", (PyCFunction)(void (*)(void))dateblock,
                   METH_VARARGS | METH_KEYWORDS, dateblock_doc},
+    {"_next", (PyCFunction)(void (*)(void))next_match,
+              METH_VARARGS | METH_KEYWORDS,
+              "_next(cron, ref=None, isc=False) -> (datetime, epoch)"},
     // sentinel
     {NULL, NULL, 0, NULL}
 };

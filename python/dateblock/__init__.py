@@ -21,7 +21,11 @@ Block (sleep) until a cron-style moment in time.
     datetime.datetime(2026, 10, 24, 13, 5)
     >>> dateblock("0 */5")                 # wait for it
 
-Run ``help(dateblock)`` for all of the options.
+With asyncio, ``await dateblock.wait("0 */5")`` waits without blocking
+other tasks.
+
+Run ``help(dateblock)`` and ``help(dateblock.wait)`` for all of the
+options.
 """
 
 # The package details.
@@ -45,3 +49,4 @@ from ._dateblock import (  # noqa: E402,F401
     DOW_MIN, DOW_MAX,
     DRIFT_MIN, DRIFT_MAX,
 )
+from ._wait import wait  # noqa: E402,F401

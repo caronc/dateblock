@@ -10,6 +10,9 @@ All notable changes to this project will be documented in this file.
 - Node.js bindings (Node.js 20 and newer): `await dateblock('0 0 9',
   { timeZone: 'Asia/Tokyo' })` waits without blocking, and `next()` only
   works the time out.  Install with `npm install @caronc/dateblock`.
+- Python: `await dateblock.wait('0 0 9')` waits with asyncio, without
+  blocking other tasks; it takes the same `cron`, `ref` and `isc` as
+  `dateblock()`.
 - Month and weekday names, as crontab allows: `0 0 9 * * Mon-Fri`,
   `-m Jan,Jul`.  A backwards range of names (`Sat-Sun`) is refused, since
   it would mean every day.
