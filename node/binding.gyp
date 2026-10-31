@@ -20,7 +20,10 @@
 # install step: the add-on comes ready built for most computers, and this
 # is only needed on the rest.
 # C++ exceptions are turned on everywhere; the engine reports bad input
-# with them.  C++17 is used on Linux: GCC 12 (Debian 12) gives a false
+# with them.  On Windows that also means undoing Node.js's
+# _HAS_EXCEPTIONS=0: with it, Microsoft's C++ library keeps only a pointer
+# to an error's message (not a copy), and the message is gone by the time
+# it is read.  C++17 is used on Linux: GCC 12 (Debian 12) gives a false
 # warning (-Wrestrict) when building the engine as C++20, node-gyp's
 # default, and nothing here needs C++20.
 {
@@ -30,6 +33,7 @@
       "sources": ["dateblock.cpp", "../src/Date.cpp"],
       "include_dirs": ["../src"],
       "defines": ["NAPI_VERSION=8"],
+      "defines!": ["_HAS_EXCEPTIONS=0"],
       "cflags_cc!": ["-fno-exceptions", "-std=gnu++20"],
       "cflags_cc": ["-std=gnu++17"],
       "xcode_settings": {

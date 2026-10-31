@@ -40,6 +40,8 @@ All notable changes to this project will be documented in this file.
   exact time).
 
 ### Fixed
+- Node.js on Windows: a syntax error's message could come out garbled (or
+  empty), since the add-on read it after it had been freed.
 - Error messages write every byte of the input that isn't plain printable
   text as `\xNN` (not just control characters), so nothing in a bad cron
   can upset a terminal or a log.

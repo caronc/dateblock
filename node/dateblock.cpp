@@ -30,6 +30,12 @@
 // It returns { when: seconds } or { error: kind, message }, where kind is
 // one of 'syntax', 'never', 'range' or 'memory'.  If toLocal throws, that
 // exception is passed on as it is.
+// Error messages are only kept safely when Microsoft's C++ library has
+// exceptions turned on (see binding.gyp)
+#if defined(_MSC_VER) && defined(_HAS_EXCEPTIONS) && !_HAS_EXCEPTIONS
+#error "Build with _HAS_EXCEPTIONS=1; error messages would be lost otherwise"
+#endif
+
 #include <math.h>
 #include <limits.h>
 #include <limits>
