@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License along with
 # this program; if not, see <https://www.gnu.org/licenses/>.
 Name:           dateblock
-Version:        2.0.0
+Version:        2.1.0
 Release:        1%{?dist}
 Summary:        Block (sleep) until a cron-style moment in time
 License:        GPL-2.0-or-later
@@ -165,6 +165,9 @@ export TEST_PHP_ARGS="-n -d extension=%{buildroot}%{php_extdir}/dateblock.so"
 %{php_extdir}/dateblock.so
 
 %changelog
+* Sat Oct 31 2026 Chris Caron <lead2gold@gmail.com> - 2.1.0-1
+- Updated to version 2.1.0
+
 * Mon Oct 26 2026 Chris Caron <lead2gold@gmail.com> - 2.0.0-1
 - Updated to version 2.0.0
 - Project renamed from datetools to dateblock; datemath has been retired

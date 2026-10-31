@@ -2,12 +2,12 @@
 
 ## Supported Versions
 
-Security fixes go into the latest 2.0.x release.
+Security fixes go into the latest 2.1.x release.
 
 |  Version  | Supported          |
 | --------- | ------------------ |
-| 2.0.x     | :white_check_mark: |
-| < 2.0.0   | :x:                |
+| 2.1.x     | :white_check_mark: |
+| < 2.1.0   | :x:                |
 
 ## Reporting a Vulnerability
 

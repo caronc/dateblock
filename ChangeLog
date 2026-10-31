@@ -1,7 +1,7 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [2.1.0] - 2026-10-31
 ### Added
 - PHP bindings (PHP 8.0 and newer): `dateblock('0 0 9', ref: $tokyo)`
   returns a `DateTimeImmutable`, reading the cron in the timezone of `$ref`.

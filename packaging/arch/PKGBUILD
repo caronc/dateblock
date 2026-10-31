@@ -6,7 +6,7 @@
 #  - php-dateblock:    the PHP extension
 pkgbase=dateblock
 pkgname=('dateblock' 'python-dateblock' 'php-dateblock')
-pkgver=2.0.0
+pkgver=2.1.0
 pkgrel=1
 pkgdesc='Block (sleep) until a cron-style moment in time'
 arch=('x86_64' 'aarch64')
