@@ -49,6 +49,12 @@ def brute_force(ref, tz, hours, minutes):
     raise AssertionError("no match within 3 days")
 
 
+# How far Python's own clock can lag behind the precise one dateblock
+# waits on.  Before Python 3.13, time.time() and datetime.now() on Windows
+# only tick about every 15.6 ms; elsewhere this is about a nanosecond.
+_CLOCK_SLACK = _time.get_clock_info("time").resolution
+
+
 class _BrokenZone(tzinfo):
     """A tzinfo that fails as soon as the local time is asked for."""
 
@@ -199,7 +205,8 @@ class DateblockTests(unittest.TestCase):
         result = db("/1", ref=datetime.now(plus14))
         self.assertLess(_time.monotonic() - start, 1.5)
         self.assertIs(result.tzinfo, plus14)
-        self.assertLessEqual(result, datetime.now(timezone.utc))
+        self.assertLessEqual(result, datetime.now(timezone.utc) +
+                             timedelta(seconds=_CLOCK_SLACK))
 
     def test_blocking_wakes_right_on_the_second(self):
         # A few seconds away, so the wait goes through several steps (the
@@ -207,7 +214,7 @@ class DateblockTests(unittest.TestCase):
         # never wake early; a busy computer may take a moment longer.
         target = int(_time.time()) + 3
         result = db("/1", ref=target - 1)
-        woke = _time.time()
+        woke = _time.time() + _CLOCK_SLACK
         self.assertEqual(result, datetime.fromtimestamp(target))
         self.assertGreaterEqual(woke, target)
         self.assertLess(woke - target, 2.0)
