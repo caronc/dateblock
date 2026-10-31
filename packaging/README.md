@@ -14,8 +14,9 @@ The Python package (PyPI) is built from `pyproject.toml` and `setup.py` at
 the top of the source tree; see [PyPI](#pypi-pip-install-dateblock) below.
 The PHP extension lives in `php/` and is described by `composer.json` at the
 top of the source tree; see [PIE](#pie-pie-install-caroncdateblock) below.
-The Node.js package lives in `node/` and is described by `package.json` and
-`binding.gyp` at the top of the source tree; see
+The Node.js package lives in `node/` (its build file is
+`node/binding.gyp`) and is described by `package.json` at the top of the
+source tree; see
 [npm](#npm-npm-install-caroncdateblock) below.
 
 Each `Dockerfile.<distro>` installs its build requirements straight from the
@@ -136,37 +137,64 @@ everywhere else; see `INSTALL.md`).  Windows isn't supported (PIE needs
 ready-built Windows files for that).
 
 ## npm (npm install @caronc/dateblock)
-The npm package holds the source: `binding.gyp`, `node/` and the engine
-(`src/Date.cpp`).  npm compiles it with node-gyp when it is installed, so
-there are no ready-built files to make.  Build, test and pack it the same
-way with:
+The Node.js add-on is published as several npm packages:
+- `@caronc/dateblock` itself: the JavaScript, plus the C++ source (in
+  `node/` and `src/`) so it can still be built on computers that have no
+  ready-built add-on.
+- One ready-built add-on per platform listed in `node/platforms.json`,
+  ie: `@caronc/dateblock-linux-x64-gnu`.  Each holds just
+  `dateblock.node`.  `@caronc/dateblock` lists them all as optional
+  dependencies, and npm only installs the one that matches the computer
+  (by its `os`, `cpu` and `libc`).  `node/index.js` loads it.
+
+Nothing runs while installing (no install script, and no `binding.gyp` at
+the top of the package, which npm would take as one), so npm 12 has
+nothing to ask to approve.  Elsewhere, users build it once with
+`npm explore @caronc/dateblock -- npm run build`.
+
+`packaging/npm/build.sh` builds and tests the add-on on the computer it
+runs on, packs `@caronc/dateblock` and that computer's ready-built
+package, then installs them in an empty project to check that:
+- the ready-built add-on is used, with nothing built while installing;
+- without it, the error says how to build it, and that build works.
+
+Build the Linux ones in a container with:
 ```bash
-make docker-npm
+make docker-npm                  # glibc (AlmaLinux 8), into dist/npm-gnu/
+make docker-npm NPM_LIBC=musl    # musl (Alpine), into dist/npm-musl/
 ```
+The glibc one is built on AlmaLinux 8 (glibc 2.28, the oldest Node.js 20
+runs on), so it runs wherever Node.js does; the musl one has the C++
+runtime built in.  `ARCH=aarch64` builds for 64-bit ARM (under emulation).
 Like everywhere else, it needs a 64-bit `time_t`; older 32-bit systems
 (including 32-bit Linux builds of Node.js) are refused (see `INSTALL.md`).
-This runs in the official Node.js image and writes the package file to
-`dist/npm/`.  The package's README is `node/README.md` (written for npm users;
-npm shows it on the package page), not the project's own README.
+The package's README is `node/README.md` (written for npm users; npm shows
+it on the package page), not the project's own README.
 
-The GitHub workflow (`.github/workflows/npm.yml`) tests it on Linux, macOS
-and Windows, and publishes it to npm when a version tag is pushed, using
-trusted publishing (no token is stored).  npm only allows that for a package
-that already exists, so the very first version is published by hand:
+The GitHub workflow (`.github/workflows/npm.yml`) builds and checks every
+ready-built add-on on its own platform (Linux in the containers above,
+macOS and Windows on their runners) on every push.  Nothing is kept (no
+artifacts).  When a version tag is pushed, and every check passed, it
+builds them again and publishes each one straight from its own job, then
+`@caronc/dateblock` itself last (so it is never on npm without them).  It
+uses trusted publishing (no token is stored), and skips versions npm
+already has, so a failed run can simply be re-run.
+
+npm only lets a package get a trusted publisher once it exists, so a new
+package is published once by hand first.  `@caronc/dateblock` already is.
+For the ready-built ones (and any platform added to `node/platforms.json`
+later):
 ```bash
-make docker-npm
 npm login
-npm publish dist/npm/caronc-dateblock-<version>.tgz
+packaging/npm/first-publish.sh
 ```
-Then, on npmjs.com, add a trusted publisher to the package's settings:
-GitHub Actions, repository `caronc/dateblock`, workflow `npm.yml`.  Under
-"Allowed actions", also allow publishing with `npm publish` (only staged
-publishing is allowed otherwise, and the workflow's publish would be
-refused).
-
-npm 12 and newer don't run a package's install script until it is
-approved; the package says how (`npm install-scripts approve
-@caronc/dateblock`) if it finds it wasn't built.
+It publishes an empty `0.0.0` placeholder of each one that isn't on npm
+yet (nothing ever installs it; `@caronc/dateblock` asks for its own
+version).  Then, on npmjs.com, add a trusted publisher to each package's
+settings: GitHub Actions, repository `caronc/dateblock`, workflow
+`npm.yml`.  Under "Allowed actions", also allow publishing with
+`npm publish` (only staged publishing is allowed otherwise, and the
+workflow's publish would be refused).
 
 ## Man Page
 The man page is generated with [Ronn-NG](https://github.com/apjanke/ronn-ng).

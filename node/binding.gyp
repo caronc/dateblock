@@ -14,8 +14,11 @@
 # You should have received a copy of the GNU General Public License along with
 # this program; if not, see <https://www.gnu.org/licenses/>.
 #
-# How npm (node-gyp) builds the Node.js add-on when the package is
-# installed: node/dateblock.cpp plus the dateblock engine (src/Date.cpp).
+# How node-gyp builds the Node.js add-on: node/dateblock.cpp plus the
+# dateblock engine (src/Date.cpp).  'npm run build' runs it.  It lives in
+# node/, not at the top, so npm (and yarn, pnpm) don't take it as an
+# install step: the add-on comes ready built for most computers, and this
+# is only needed on the rest.
 # C++ exceptions are turned on everywhere; the engine reports bad input
 # with them.  C++17 is used on Linux: GCC 12 (Debian 12) gives a false
 # warning (-Wrestrict) when building the engine as C++20, node-gyp's
@@ -24,8 +27,8 @@
   "targets": [
     {
       "target_name": "dateblock",
-      "sources": ["node/dateblock.cpp", "src/Date.cpp"],
-      "include_dirs": ["src"],
+      "sources": ["dateblock.cpp", "../src/Date.cpp"],
+      "include_dirs": ["../src"],
       "defines": ["NAPI_VERSION=8"],
       "cflags_cc!": ["-fno-exceptions", "-std=gnu++20"],
       "cflags_cc": ["-std=gnu++17"],

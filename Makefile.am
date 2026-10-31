@@ -51,10 +51,13 @@ EXTRA_DIST = \
 	packaging/docker/Dockerfile.el10 \
 	packaging/docker/Dockerfile.debian13 \
 	packaging/docker/Dockerfile.arch \
+	packaging/docker/Dockerfile.npm-gnu \
+	packaging/docker/Dockerfile.npm-musl \
 	.github/workflows/wheels.yml \
 	.github/workflows/pypi-upload.sh \
 	.github/workflows/php.yml \
 	.github/workflows/npm.yml \
+	.github/workflows/npm-publish.sh \
 	.github/dependabot.yml \
 	.github/release-tools/requirements.txt \
 	pyproject.toml \
@@ -66,7 +69,12 @@ EXTRA_DIST = \
 	python/tests/test_dateblock.py \
 	composer.json \
 	package.json \
-	binding.gyp \
+	node/binding.gyp \
+	node/platform.js \
+	node/platforms.json \
+	packaging/npm/build.sh \
+	packaging/npm/first-publish.sh \
+	packaging/npm/stage.js \
 	node/dateblock.cpp \
 	node/README.md \
 	node/index.js \

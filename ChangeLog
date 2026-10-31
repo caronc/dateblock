@@ -27,6 +27,11 @@ All notable changes to this project will be documented in this file.
   otherwise.
 
 ### Changed
+- Node.js: the add-on now comes ready built for Linux (x64 and arm64, glibc
+  and musl/Alpine), macOS (Intel and Apple silicon) and Windows (x64 and
+  arm64), so `npm install @caronc/dateblock` compiles nothing and has no
+  install step to approve on npm 12.  On any other computer, build it once
+  with `npm explore @caronc/dateblock -- npm run build`.
 - macOS and Windows wait with the system's own timer, set to the exact
   moment, instead of waking every second: it still fires on time if the
   computer sleeps or the clock is changed.  As a safety net the clock is

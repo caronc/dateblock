@@ -15,25 +15,51 @@
 // this program; if not, see <https://www.gnu.org/licenses/>.
 'use strict';
 
-// The C++ add-on, compiled by npm when the package is installed.  npm 12
-// and newer only run a package's install script once it is approved, so
-// say how when it is missing.
-let addon;
-try {
-  addon = require('../build/Release/dateblock.node');
-} catch (error) {
-  if (error.code !== 'MODULE_NOT_FOUND') {
-    throw error;
+// The C++ add-on.  For most computers it comes ready built, in a small
+// package npm installs alongside this one (only the one for this computer,
+// ie: @caronc/dateblock-linux-x64-gnu).  A copy built here with
+// 'npm run build' is used first, if there is one.
+const PLATFORMS = require('./platforms.json');
+const platformKey = require('./platform.js');
+
+function loadAddon() {
+  try {
+    return require('./build/Release/dateblock.node');
+  } catch (error) {
+    if (error.code !== 'MODULE_NOT_FOUND') {
+      throw error;
+    }
+  }
+
+  const key = platformKey();
+  const name = `@caronc/dateblock-${key}`;
+  const build =
+    '  npm explore @caronc/dateblock -- npm run build\n' +
+    "(or run 'npm run build' in its folder).  Building needs a C++ compiler " +
+    'and Python; see https://github.com/nodejs/node-gyp#installation';
+  if (PLATFORMS[key]) {
+    try {
+      return require(`${name}/dateblock.node`);
+    } catch (error) {
+      if (error.code !== 'MODULE_NOT_FOUND') {
+        throw new Error(
+          `The ready-built add-on (${name}) doesn't work on this computer, ` +
+          'so @caronc/dateblock has to be built here once:\n' + build,
+          { cause: error });
+      }
+      throw new Error(
+        `The ready-built add-on (${name}) wasn't installed; installing ` +
+        'with --omit=optional (or --no-optional) leaves it out.  Install ' +
+        'again without it, or build @caronc/dateblock here once:\n' + build,
+        { cause: error });
+    }
   }
   throw new Error(
-    "@caronc/dateblock wasn't built when it was installed (npm 12 and newer " +
-    'skip install scripts until they are approved).  Run:\n' +
-    '  npm install-scripts approve @caronc/dateblock\n' +
-    '  npm rebuild @caronc/dateblock\n' +
-    '(building needs a C++ compiler and Python; see ' +
-    'https://github.com/nodejs/node-gyp#installation)', { cause: error });
+    `@caronc/dateblock has no ready-built add-on for this computer (${key}), ` +
+    'so it has to be built here once:\n' + build);
 }
-const { cronAfter, countDefault: COUNT_DEFAULT, countMax: COUNT_MAX } = addon;
+
+const { cronAfter, countDefault: COUNT_DEFAULT, countMax: COUNT_MAX } = loadAddon();
 
 // How often a long wait checks the clock again (in milliseconds).  Timers
 // stop counting while the computer sleeps and don't notice the clock being

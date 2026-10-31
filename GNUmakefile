@@ -27,7 +27,7 @@
 #   make docker-man               regenerate packaging/man/dateblock.1
 #   make docker-shell             open a shell in the build container
 #   make docker-pypi              build the PyPI source package and wheels
-#   make docker-npm               build, test and pack the npm package
+#   make docker-npm               build, test and pack the npm packages
 #   make release-assets VERSION=x.y.z
 #                                 build every file for a release (see below)
 #   make release-recipes VERSION=x.y.z
@@ -166,22 +166,21 @@ docker-pypi:
 	$(PYRUN) twine==$(TWINE_VERSION) check --strict $(PYPI_OUT)/*
 	@echo "PyPI files written to $(PYPI_OUT)/"
 
-# npm: builds and tests the Node.js package in the official Node.js image
-# (NODE_IMAGE), the way 'npm install' builds it for users, and writes the
-# package file to dist/npm/.  The package is published by the GitHub
-# workflow (.github/workflows/npm.yml) when a version tag is pushed.
-NODE_IMAGE ?= docker.io/library/node:24
-NPM_OUT = $(CURDIR)/dist/npm
+# npm: builds and tests the Node.js add-on, then packs and checks the npm
+# packages (see packaging/npm/build.sh): @caronc/dateblock itself and the
+# ready-built add-on for this kind of Linux.  NPM_LIBC picks the container:
+#   gnu   AlmaLinux 8 (the default): glibc 2.28, the oldest Node.js 20 runs
+#         on, so the add-on runs wherever Node.js does
+#   musl  Alpine
+# ARCH=aarch64 builds for 64-bit ARM.  The files are written to
+# dist/npm-<libc>/ (or dist/npm-<libc>-<arch>/).  The GitHub workflow
+# (.github/workflows/npm.yml) builds them the same way, plus macOS and
+# Windows, and publishes them when a version tag is pushed.
+NPM_LIBC ?= gnu
 
 docker-npm:
-	@test -n "$(CONTAINER)" || \
-	   { echo "Neither docker nor podman was found."; exit 1; }
-	rm -rf $(NPM_OUT)
-	mkdir -p $(NPM_OUT)
-	$(CONTAINER) run --rm $(DOCKER_USER) -e HOME=/tmp \
-	   -v $(CURDIR):/src:ro,z -v $(NPM_OUT):/out:z \
-	   $(NODE_IMAGE) /src/packaging/docker/build.sh npm
-	@echo "npm package written to dist/npm/"
+	@$(MAKE) --no-print-directory docker-package DISTRO=npm-$(NPM_LIBC) \
+	   DOCKER_MODE=npm
 
 # The files for a GitHub release, in dist/release-<version>/, plus the
 # release notes (that version's ChangeLog section) beside it:
@@ -221,13 +220,13 @@ release-check:
 
 release-assets: release-check
 	@# Start from empty build folders, so only this run's files are gathered
-	rm -rf $(RELEASE_DIR) $(RELEASE_NOTES) \
+	rm -rf $(RELEASE_DIR) $(RELEASE_NOTES) dist/npm-* \
 	   $(foreach d,$(DOCKER_DISTROS),dist/$(d) dist/$(d)-*)
-	@# The npm package first (it's the quickest); the Node.js image is
-	@# removed afterwards unless it was already here
-	@had=$$($(CONTAINER) images -q $(NODE_IMAGE)); \
-	   $(MAKE) --no-print-directory docker-npm || exit 1; \
-	   [ -n "$$had" ] || $(CONTAINER) rmi $(NODE_IMAGE) >/dev/null
+	@# The npm packages first (they're the quickest)
+	@for libc in gnu musl; do \
+	   $(MAKE) --no-print-directory docker-npm NPM_LIBC=$$libc || exit 1; \
+	   $(MAKE) --no-print-directory docker-forget DISTRO=npm-$$libc; \
+	done
 	@for arch in $(RELEASE_ARCHS); do \
 	   distros="$(DOCKER_DISTROS)"; \
 	   [ $$arch = native ] || distros="$(DOCKER_ARM_DISTROS)"; \

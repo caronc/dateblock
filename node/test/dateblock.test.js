@@ -240,8 +240,10 @@ test('ES module import works too', async () => {
   assert.strictEqual(esm.COUNT_MAX, COUNT_MAX);
 });
 
-test('the version matches the rest of dateblock', () => {
-  const init = path.join(__dirname, '..', '..', 'python', 'dateblock', '__init__.py');
+// Only in a checkout of the whole project (an installed copy has no Python
+// files)
+const init = path.join(__dirname, '..', '..', 'python', 'dateblock', '__init__.py');
+test('the version matches the rest of dateblock', { skip: !fs.existsSync(init) }, () => {
   const version = /^__version__ = "(.*)"$/m.exec(fs.readFileSync(init, 'utf8'))[1];
   assert.strictEqual(require('../../package.json').version, version);
 });

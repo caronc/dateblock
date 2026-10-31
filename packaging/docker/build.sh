@@ -44,13 +44,7 @@ fi
 cd /tmp/src
 
 if [ "$mode" = npm ]; then
-   # npm compiles the add-on while installing, as it does for users
-   npm install --foreground-scripts --no-audit --no-fund
-   TZ=UTC npm test
-   TZ=America/New_York npm test
-   # npm shows the package's README.md; use the one written for npm users
-   cp node/README.md README.md
-   npm pack --pack-destination /out
+   packaging/npm/build.sh /out
    exit 0
 fi
 

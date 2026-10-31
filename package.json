@@ -25,21 +25,22 @@
     }
   },
   "files": [
-    "binding.gyp",
+    "node/binding.gyp",
     "node/dateblock.cpp",
     "node/index.js",
     "node/index.mjs",
     "node/index.d.ts",
+    "node/platform.js",
+    "node/platforms.json",
     "src/Date.cpp",
     "src/Date.h",
     "COPYING"
   ],
-  "gypfile": true,
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "install": "node-gyp rebuild",
+    "build": "node-gyp rebuild --directory node",
     "test": "node --test node/test/*.test.js"
   },
   "publishConfig": {

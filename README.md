@@ -519,12 +519,15 @@ can't hold dates past 2038, so the build stops there with an error (see
 ```bash
 npm install @caronc/dateblock
 ```
-npm compiles the C++ code while installing, so it needs a C++ compiler and
-Python (see [node-gyp](https://github.com/nodejs/node-gyp#installation)).
-npm 12 and newer only run that step once you allow it, so the first time:
+It comes ready built for Linux (x64 and arm64, including Alpine), macOS
+(Intel and Apple silicon) and Windows (x64 and arm64): npm installs the
+one for your computer, so nothing is compiled and there is no install step
+to approve.  Anywhere else, build it once after installing (this needs a
+C++ compiler and Python; see
+[node-gyp](https://github.com/nodejs/node-gyp#installation)); the error
+you get without it says so too:
 ```bash
-npm install-scripts approve @caronc/dateblock
-npm rebuild @caronc/dateblock
+npm explore @caronc/dateblock -- npm run build
 ```
 It needs a 64-bit `time_t` too, so it won't build on older 32-bit systems
 (see [INSTALL.md](https://github.com/caronc/dateblock/blob/master/INSTALL.md)).
