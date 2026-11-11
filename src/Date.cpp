@@ -353,12 +353,13 @@ namespace {
 
    // Splits a whitespace separated cron string into its fields.
    //  - Missing fields are filled in with '*'.
-   //  - A '+N' entry (dateblock format only) jumps straight to the drift
-   //    field; nothing may follow it.
+   //  - A '+N' or '-N' entry (dateblock format only) jumps straight to the
+   //    drift field; nothing may follow it.  No other field can be below
+   //    zero, so a '-' at the start of an entry always means a drift.
    //  - A shortcut such as '@daily' must be the first entry; only a '+N'
-   //    drift may follow it (dateblock format).
+   //    or '-N' drift may follow it (dateblock format).
    //  - Returns false (with 'why' set) if the string has more fields than
-   //    allowed, or a '+' without a drift.
+   //    allowed, or a '+' or '-' without a drift.
    bool SplitCronString(const string& strIn, bool isISC,
                         vector<string>& tokens, string& why)
    {
@@ -385,15 +386,17 @@ namespace {
 
          if (drifted)
          {
-            why = "nothing may follow the drift (the '+' entry)";
+            why = "nothing may follow the drift (the '+' or '-' entry)";
             ok = false;
             break;
          }
-         if (!shortcut.empty() && (isISC || token[0] != '+'))
+         bool drift = !isISC && (token[0] == '+' || token[0] == '-');
+         if (!shortcut.empty() && !drift)
          {
             why = isISC ?
                "nothing may follow '" + shortcut + "'" :
-               "only a drift (ie: '+20') may follow '" + shortcut + "'";
+               "only a drift (ie: '+20' or '-20') may follow '" + shortcut +
+               "'";
             ok = false;
             break;
          }
@@ -425,19 +428,22 @@ namespace {
             break;
          }
 
-         if (!isISC && token[0] == '+')
+         if (drift)
          {
-            // drift entry; fill in our blanks first
+            // drift entry; fill in our blanks first.  A '-' stays (it is
+            // part of the number), a '+' is dropped.
             while (tokens.size() < (token_max-1))
                tokens.push_back("*");
-            token.erase(0, 1);
             drifted = true;
-            if (token.empty())
+            if (token == "+" || token == "-")
             {
-               why = "a '+' needs the drift after it (ie: '+20')";
+               why = "a '" + token + "' needs the drift after it (ie: '" +
+                     token + "20')";
                ok = false;
                break;
             }
+            if (token[0] == '+')
+               token.erase(0, 1);
          }
          tokens.push_back(token);
       }
@@ -449,9 +455,17 @@ namespace {
       return ok;
    }
 
+   // A field's range as shown in a message: '0-59', or '-10 to 10' when
+   // it goes below zero (so the '-' isn't read as a range)
+   string RangeText(int lo, int hi)
+   {
+      return to_string(lo) + (lo < 0 ? " to " : "-") + to_string(hi);
+   }
+
    // Reads the number starting at 'pos' (moving 'pos' past it), stopping
    // at 'end'.  Fails (with 'why' set) if there is no number there or it
    // is outside of 'lo' to 'hi'.
+   //  - When 'lo' is below zero, the number may start with a '-'.
    //  - 'names' (if not NULL) holds a name for each value from 'lo' on
    //    (ie: "Jan" for 1), ending with NULL; a name may be used instead of
    //    the number, and upper and lower case don't matter.
@@ -480,30 +494,38 @@ namespace {
          why = "'" + Shown(word) + "' is not a name (use " + list + ")";
          return false;
       }
+      // A field that allows values below zero (the drift) takes a '-'
+      // in front of the number
+      bool negative = (lo < 0 && pos < end && str[pos] == '-');
+      if (negative)
+         pos++;
+      size_t digits = pos;
+      long long limit = negative ? -(long long)lo : (long long)hi;
       while (pos < end && IsDigit((unsigned char)str[pos]))
       {
          out = out * 10 + (str[pos] - '0');
-         if (out > hi)
+         if (out > limit)
          {
             while (pos < end && IsDigit((unsigned char)str[pos]))
                pos++;
             why = Shown(str, start, pos - start) + " is outside of " +
-                  to_string(lo) + "-" + to_string(hi);
+                  RangeText(lo, hi);
             return false;
          }
          pos++;
       }
-      if (pos == start)
+      if (pos == digits)
       {
-         why = (pos < end) ?
-            "'" + Shown(str, pos, end - pos) + "' is not a number" :
+         why = (start < end && (pos < end || negative)) ?
+            "'" + Shown(str, start, end - start) + "' is not a number" :
             "a number is missing at the end";
          return false;
       }
+      if (negative)
+         out = -out;
       if (out < lo)
       {
-         why = to_string(out) + " is outside of " + to_string(lo) + "-" +
-               to_string(hi);
+         why = to_string(out) + " is outside of " + RangeText(lo, hi);
          return false;
       }
       return true;
@@ -837,6 +859,8 @@ namespace {
    //                every x'th value from the lowest one (crontab)
    // Anything else (ie: '5-', 'x-y-z', '/x/y', or an empty entry such as
    // '5,,6') is invalid.
+   //  - In a field that goes below zero (the drift), x and y may be
+   //    negative (ie: '-60', '-120--60' or '-60-60'); a step never is.
    //  - Each entry is handed to 'add(first, last, step)', which may refuse
    //    it by returning false.
    //  - 'given' is false when the field is '*' (or empty).
@@ -890,7 +914,7 @@ namespace {
             {
                // Modulus
                pos += (str[start] == '/') ? 1 : 2;
-               if (!ReadNumber(str, pos, end, lo, hi, step, why))
+               if (!ReadNumber(str, pos, end, lo < 0 ? 0 : lo, hi, step, why))
                {
                   why = "the step after '/': " + why;
                   return false;
@@ -1200,6 +1224,10 @@ namespace {
       // A drift is added after the match.  Matching from 'now - drift' keeps
       // only the part of the drift that fits inside the schedule's interval,
       // so no match is ever skipped.  With several drifts the earliest wins.
+      //  - A negative drift works the same way: the search starts after
+      //    'now + |drift|', so the time it gives (the match less the
+      //    drift) is still after now.  Matches whose early time has
+      //    already passed are skipped.
       //  - Drifts are handled largest first.  One search from 'now -
       //    largest' finds a match that every drift reaching past it shares,
       //    so those need no search of their own; only the smallest of them
@@ -1218,14 +1246,17 @@ namespace {
       while (end != drifts.begin())
       {
          time_t largest = *(end - 1);
-         if (after < lowest + largest)
+         if (largest > 0 ? after < lowest + largest
+                         : after > highest + largest)
             throw runtime_error("The reference time is out of range.");
          time_t match = NextMatch(s, after - largest, zone);
 
-         // The smallest drift that still lands after now
+         // The smallest drift that still lands after now.  (A negative one
+         // lands between now and the match, so only a positive one can
+         // overflow.)
          vector<time_t>::iterator use =
             upper_bound(drifts.begin(), end, after - match);
-         if (match > highest - *use)
+         if (*use > 0 && match > highest - *use)
             throw runtime_error("The matching time is out of range.");
          time_t when = match + *use;
          if (when < best)
@@ -1267,14 +1298,11 @@ const int Date::DBL_CRON_FIELD_COUNT = 7;
 // Drift Defaults
 const int Date::T_NO_ENTRY=-1;
 
-// Presently our AddSec() function only handles integers as input and therefore
-// we need to set the max to the maximum values of a 'signed integer' AddSec()
-// will always take a signed value since we allow the decrementing of time by
-// passing in a negative number
+// A drift is a number of seconds that fits in an int.  It may be negative
+// (wake up that long before the matched time); the lowest is -INT_MAX so
+// that every drift can be turned around without overflowing.
 const int Date::T_DRIFT_MAX=INT_MAX;
-
-// Minimum Drift Time
-const int Date::T_DRIFT_MIN=0;
+const int Date::T_DRIFT_MIN=-INT_MAX;
 
 //------------------------------------------------
 //
@@ -1883,7 +1911,9 @@ const Date Date::Cron(int lSecOffset,
       f.given[i] = (values[i] >= Field(i).lo && values[i] <= Field(i).hi);
       f.mask[i] = f.given[i] ? (uint64_t)1 << values[i] : 0;
    }
-   if (lDriftOffset >= T_DRIFT_MIN && lDriftOffset <= T_DRIFT_MAX)
+   // T_NO_ENTRY (-1) still means no drift here; a drift of -1 second needs
+   // one of the string versions
+   if (lDriftOffset != T_NO_ENTRY && lDriftOffset >= T_DRIFT_MIN)
       f.drifts.push_back(lDriftOffset);
    f.isISC = false;
    f.domStar = f.dowStar = true;

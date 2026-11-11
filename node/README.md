@@ -14,7 +14,8 @@ import { dateblock } from '@caronc/dateblock';
 await dateblock('* /15');
 ```
 
-- Seconds and a "drift" (extra wait) on top of regular cron.
+- Seconds and a "drift" (wake up some seconds later, or earlier) on top
+  of regular cron.
 - Reads regular 5-field crontab entries too.
 - Any timezone, with daylight saving handled for you.
 - Waiting never blocks Node.js: `dateblock()` returns a promise.
@@ -66,6 +67,9 @@ upcoming('0 9 * * 1-5', { isc: true, count: 5 });
 
 // 9:00 in Tokyo, whatever timezone this computer is in
 await dateblock('0 0 9', { timeZone: 'Asia/Tokyo' });
+
+// A negative drift wakes up early: 6 days before 9:00 on December 25th
+next('0 0 9 25 12 * -518400');
 
 // Stop waiting early with an AbortSignal
 const controller = new AbortController();
@@ -158,7 +162,7 @@ Each field can be:
 A shortcut can stand for the whole cron: `@hourly`, `@daily` (or
 `@midnight`), `@weekly` (Sundays), `@monthly` and `@yearly` (or
 `@annually`), each at the start of the hour or day.  Only a drift may
-follow one, ie: `'@daily +30'` (and not with `isc: true`, since a crontab
+follow one, ie: `'@daily +30'` or `'@daily -30'` (and not with `isc: true`, since a crontab
 entry has no drift).
 
 Things worth knowing:
@@ -166,11 +170,17 @@ Things worth knowing:
   value: `'* 5'` is exactly 5 minutes past (second 0), not every second of
   that minute.
 - The day of the month and the day of the week must both match.
-- **Drift** is extra time (in seconds) added once the time is found:
+- **Drift** moves the time found by some seconds (later, or earlier when
+  negative):
   `'* /10 * * * * 60'` waits for 1, 11, 21... minutes past.  `+` jumps
   straight to the drift field, so `'* /10 +60'` is the same.  A drift
   longer than the schedule's own interval only keeps the remainder, so no
   match is skipped.
+- A **negative drift** moves each matched time back instead:
+  `'0 0 9 1 * * -259200'` is 9:00 three days before each 1st of the month
+  (a reminder before rent is due), and `'0 0 9 25 12 * -518400'` is 9:00 on
+  December 19th (6 days early).
+  `-60` works inline just like `+60`.
 
 | Cron | Waits for |
 |---|---|

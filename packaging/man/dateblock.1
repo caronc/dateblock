@@ -1,6 +1,6 @@
 .\" generated with Ronn-NG/v0.10.1
 .\" http://github.com/apjanke/ronn-ng/tree/0.10.1
-.TH "DATEBLOCK" "1" "October 2026" "Dateblock" "Dateblock Manual"
+.TH "DATEBLOCK" "1" "November 2026" "Dateblock" "Dateblock Manual"
 .SH "NAME"
 \fBdateblock\fR \- block (sleep) until a cron\-style moment in time
 .SH "SYNOPSIS"
@@ -16,7 +16,7 @@ On top of the regular cron fields, \fBdateblock\fR can also:
 .IP "\(bu" 4
 match on a specific \fIsecond\fR (not just a minute)\.
 .IP "\(bu" 4
-\fIdrift\fR; wait an extra number of seconds after the time is matched\.
+\fIdrift\fR; move the matched time a number of seconds later (or earlier)\.
 .IP "" 0
 .P
 Use \fB\-\-test\fR to see when \fBdateblock\fR would unblock without waiting, or \fB\-\-count\fR to list the next few times\.
@@ -49,7 +49,7 @@ Given a \fICOMMAND\fR, \fBdateblock\fR runs it once the time is reached and exit
 .P
 \fB\-w\fR, \fB\-\-dow=\fR\fIDOW\fR: The day(s) of the week to unblock on (0\-6, or Sun to Sat; Sunday is 0 or 7)\.
 .P
-\fB\-x\fR, \fB\-\-drift=\fR\fIDRIFT\fR: Extra seconds to wait once the time is matched; see \fIDRIFTING\fR\. Use the 7th field (or \fB+\fR\fIDRIFT\fR) instead when using \fB\-\-cron\fR\.
+\fB\-x\fR, \fB\-\-drift=\fR\fIDRIFT\fR: Extra seconds to wait once the time is matched; a negative drift unblocks that much earlier (ie: \fB\-x \-3600\fR)\. See \fIDRIFTING\fR\. Use the 7th field (or \fB+\fR\fIDRIFT\fR / \fB\-\fR\fIDRIFT\fR) instead when using \fB\-\-cron\fR\.
 .P
 At least one field (or \fB\-\-cron\fR) must be given\. Fields that are not given match any value, except for the ones \fIsmaller\fR than the smallest field given: those are reset to their lowest value\. So \fB\-n 5\fR unblocks at exactly 5 minutes past the hour (second 0), and \fB\-o 3\fR at exactly 3:00:00\.
 .P
@@ -98,9 +98,9 @@ sec (0 \- 59) \-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-\-+  |  |  |  |  |
 .P
 Missing fields at the end are filled in with \fB*\fR, so \fB* 5\fR is the same as \fB* 5 * * * * *\fR\.
 .P
-An entry starting with a plus (\fB+\fR) jumps straight to the drift field, so \fB* /5 +60\fR is the same as \fB* /5 * * * * 60\fR\. Nothing may follow the \fB+\fR entry\.
+An entry starting with a plus (\fB+\fR) jumps straight to the drift field, so \fB* /5 +60\fR is the same as \fB* /5 * * * * 60\fR\. An entry starting with a minus (\fB\-\fR) does the same with a negative drift: \fB0 0 9 25 12 \-518400\fR is the same as \fB0 0 9 25 12 * \-518400\fR\. Nothing may follow the \fB+\fR or \fB\-\fR entry\.
 .P
-The crontab(5) shortcuts can stand for the whole string, with or without \fB\-\-isc\fR\. Without \fB\-\-isc\fR a \fB+\fR drift may follow one (ie: \fB@daily +30\fR); nothing else may, and with \fB\-\-isc\fR nothing may follow it at all (a crontab entry has no drift):
+The crontab(5) shortcuts can stand for the whole string, with or without \fB\-\-isc\fR\. Without \fB\-\-isc\fR a drift may follow one (ie: \fB@daily +30\fR or \fB@daily \-30\fR); nothing else may, and with \fB\-\-isc\fR nothing may follow it at all (a crontab entry has no drift):
 .IP "\(bu" 4
 \fB@hourly\fR: the start of every hour\.
 .IP "\(bu" 4
@@ -158,9 +158,9 @@ Daylight saving follows that timezone\. A time skipped when the clocks go forwar
 \fBdateblock\fR unblocks at that exact moment, no matter which timezone the computer itself is in\.
 .IP "" 0
 .SH "DRIFTING"
-A drift adds a number of seconds onto the time that was matched\. For example, to wake up on the 1st minute of every 10 minute interval (1, 11, 21, \|\.\|\.\|\., 51) use a minute of \fB*/10\fR with a drift of 60 seconds\.
+A drift moves the time that was matched by a number of seconds: later, or earlier when negative\. For example, to wake up on the 1st minute of every 10 minute interval (1, 11, 21, \|\.\|\.\|\., 51) use a minute of \fB*/10\fR with a drift of 60 seconds\.
 .IP "\(bu" 4
-A drift is always measured in seconds and is applied \fIafter\fR the schedule is matched\.
+A drift is always measured in (real) seconds and is applied to the time the schedule matched\.
 .IP "\(bu" 4
 A drift can not be given on its own; it needs a schedule to go with it\.
 .IP "\(bu" 4
@@ -169,6 +169,10 @@ A drift can not be longer than the interval of the schedule itself\. Only the re
 Inline drifts (in the cron string) accept the separator and range syntax, so \fB0 /5 +15,45\fR unblocks 15 and 45 seconds after every 5th minute\. The modulus (\fB/x\fR) syntax does not apply to drifts\.
 .IP "\(bu" 4
 A drift list can hold at most 10,000 values (ie: \fB+0\-9999\fR)\.
+.IP "\(bu" 4
+A negative drift moves each matched time back that many seconds\. A reminder 3 days before rent is due on the 1st is \fB0 0 9 1 * * \-259200\fR (9:00 on the 28th, 29th or 26th, however long the month is)\. An early time that has already passed is skipped, like any past match\.
+.IP "\(bu" 4
+Drifts go from \-2147483647 to 2147483647\.
 .IP "" 0
 .SH "EXAMPLES"
 Block until the next minute divisible by 10 (0, 10, 20, 30, 40 and 50):
@@ -222,6 +226,14 @@ Block until the next midnight, then 30 seconds more:
 .IP "" 4
 .nf
 $ dateblock \-c "@daily +30"
+.fi
+.IP "" 0
+.P
+Block until 6 days before 9:00 on December 25th (9:00 on December 19th):
+.IP "" 4
+.nf
+$ dateblock \-c "0 0 9 25 12 * \-518400"
+$ dateblock \-o 9 \-d 25 \-m 12 \-x \-518400
 .fi
 .IP "" 0
 .P

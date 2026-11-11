@@ -18,7 +18,7 @@ foreground: it returns the moment the schedule is next matched.
 On top of the regular cron fields, **dateblock** can also:
 
   * match on a specific _second_ (not just a minute).
-  * _drift_; wait an extra number of seconds after the time is matched.
+  * _drift_; move the matched time a number of seconds later (or earlier).
 
 Use `--test` to see when **dateblock** would unblock without waiting, or
 `--count` to list the next few times.
@@ -82,8 +82,9 @@ with the command's exit code; see [RUNNING A COMMAND][].
   7).
 
   `-x`, `--drift=`<DRIFT>:
-  Extra seconds to wait once the time is matched; see [DRIFTING][]. Use the
-  7th field (or `+`<DRIFT>) instead when using `--cron`.
+  Extra seconds to wait once the time is matched; a negative drift unblocks
+  that much earlier (ie: `-x -3600`). See [DRIFTING][]. Use the 7th field
+  (or `+`<DRIFT> / `-`<DRIFT>) instead when using `--cron`.
 
 At least one field (or `--cron`) must be given. Fields that are not given
 match any value, except for the ones _smaller_ than the smallest field given:
@@ -141,11 +142,13 @@ Missing fields at the end are filled in with `*`, so `* 5` is the same as
 `* 5 * * * * *`.
 
 An entry starting with a plus (`+`) jumps straight to the drift field, so
-`* /5 +60` is the same as `* /5 * * * * 60`. Nothing may follow the `+`
-entry.
+`* /5 +60` is the same as `* /5 * * * * 60`. An entry starting with a minus
+(`-`) does the same with a negative drift: `0 0 9 25 12 -518400` is the same
+as `0 0 9 25 12 * -518400`. Nothing may follow the `+` or `-` entry.
 
 The crontab(5) shortcuts can stand for the whole string, with or without
-`--isc`. Without `--isc` a `+` drift may follow one (ie: `@daily +30`);
+`--isc`. Without `--isc` a drift may follow one (ie: `@daily +30` or
+`@daily -30`);
 nothing else may, and with `--isc` nothing may follow it at all (a crontab
 entry has no drift):
 
@@ -210,12 +213,13 @@ variable, or the system setting), unless `--timezone` names another one.
 
 ## DRIFTING
 
-A drift adds a number of seconds onto the time that was matched. For
+A drift moves the time that was matched by a number of seconds: later,
+or earlier when negative. For
 example, to wake up on the 1st minute of every 10 minute interval (1, 11,
 21, ..., 51) use a minute of `*/10` with a drift of 60 seconds.
 
-  * A drift is always measured in seconds and is applied _after_ the
-    schedule is matched.
+  * A drift is always measured in (real) seconds and is applied to the
+    time the schedule matched.
   * A drift can not be given on its own; it needs a schedule to go with it.
   * A drift can not be longer than the interval of the schedule itself.
     Only the remainder is kept, so that no matching time is ever skipped.
@@ -225,6 +229,12 @@ example, to wake up on the 1st minute of every 10 minute interval (1, 11,
     syntax, so `0 /5 +15,45` unblocks 15 and 45 seconds after every 5th
     minute. The modulus (`/x`) syntax does not apply to drifts.
   * A drift list can hold at most 10,000 values (ie: `+0-9999`).
+  * A negative drift moves each matched time back that many seconds. A
+    reminder 3 days before rent is due on the 1st is
+    `0 0 9 1 * * -259200` (9:00 on the 28th, 29th or 26th, however long
+    the month is). An
+    early time that has already passed is skipped, like any past match.
+  * Drifts go from -2147483647 to 2147483647.
 
 ## EXAMPLES
 
@@ -261,6 +271,11 @@ Block until 9:00 on weekdays, written as a regular crontab entry:
 Block until the next midnight, then 30 seconds more:
 
     $ dateblock -c "@daily +30"
+
+Block until 6 days before 9:00 on December 25th (9:00 on December 19th):
+
+    $ dateblock -c "0 0 9 25 12 * -518400"
+    $ dateblock -o 9 -d 25 -m 12 -x -518400
 
 Block until 9:00 in Tokyo, whatever timezone this computer is in:
 

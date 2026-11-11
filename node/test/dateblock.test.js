@@ -23,6 +23,29 @@ test('drift, range steps and the month field', () => {
   assert.strictEqual(utc('0 0 0 * 3'), '2026-03-01T00:00:00.000Z');
 });
 
+test('a negative drift wakes up that many seconds early', () => {
+  // 6 days (518400 seconds) before 9:00 on December 25th
+  const ref = Date.UTC(2026, 10, 10);
+  for (const cron of ['0 0 9 25 12 * -518400', '0 0 9 25 12 -518400', '0 0 9 25 12 +-518400']) {
+    assert.strictEqual(utc(cron, { ref }), '2026-12-19T09:00:00.000Z', cron);
+  }
+  // Christmas is still to come, but its early time has passed: next year
+  assert.strictEqual(utc('0 0 9 25 12 * -518400', { ref: Date.UTC(2026, 11, 19, 9) }),
+    '2027-12-19T09:00:00.000Z');
+  assert.strictEqual(utc('0 0 9 25 12 * -518400', { ref: Date.UTC(2026, 11, 22) }),
+    '2027-12-19T09:00:00.000Z');
+  // Mixed with a positive drift, the earliest still to come wins
+  assert.strictEqual(utc('0 0 10 20 12 * -3600,3600', { ref: Date.UTC(2026, 11, 20, 9, 30) }),
+    '2026-12-20T11:00:00.000Z');
+  // Read in the timezone asked for (09:00 in Tokyo is 00:00 UTC)
+  assert.strictEqual(utc('0 0 9 25 12 -518400', { ref, timeZone: 'Asia/Tokyo' }),
+    '2026-12-19T00:00:00.000Z');
+  // Each listed time follows the one before it
+  assert.deepStrictEqual(
+    upcoming('@daily -3600', { count: 3, ref, timeZone: 'UTC' }).map((d) => d.toISOString()),
+    ['2026-11-10T23:00:00.000Z', '2026-11-11T23:00:00.000Z', '2026-11-12T23:00:00.000Z']);
+});
+
 test('month and weekday names, and shortcuts such as @daily', () => {
   // 2026-01-01 is a Thursday
   assert.strictEqual(utc('0 0 9 * * Sat,Sun'), '2026-01-03T09:00:00.000Z');
@@ -86,6 +109,9 @@ test('a cron that is not written correctly is a SyntaxError', () => {
     ['*/15 * * * * *', true, 'there are too many fields'],
     ['0 0 0 * * Monday', false, "'Monday' is not a name"],
     ['@reboot', false, "'@reboot' is not a time"],
+    ['* * * * * * -2147483648', false, '-2147483648 is outside of -2147483647 to 2147483647'],
+    ['0 -5 0', false, 'nothing may follow the drift'],
+    ['-5 * * * *', true, "minute '-5': '-5' is not a number"],
   ]) {
     assert.throws(() => next(cron, { isc }),
       (e) => e instanceof SyntaxError && e.message.includes(message), cron.slice(0, 20));

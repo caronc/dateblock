@@ -400,7 +400,7 @@ static int CheckHardening()
       return Fail("The largest drift was not handled");
 
    // Broken entries are refused instead of quietly matching anything
-   const char *broken[] = {"5-", "5-,7", "/", "*/", "-5", "5-7-9", "/5/2",
+   const char *broken[] = {"5-", "5-,7", "/", "*/", "--5", "5-7-9", "/5/2",
                            "5/2", "**", "5*", "99", "1-99"};
    for (unsigned i = 0; i < sizeof(broken)/sizeof(broken[0]); i++)
    {
@@ -622,6 +622,16 @@ static int CheckDaylightSaving()
    else if (!Expect("0 0 1 8-14 3 0 3600,7200", false, 2025, 1, 1, 0, 0, 0,
                     "2025-03-09 03:00:00"))
       rc = Fail("A drift across the clocks going forward is wrong");
+   // A negative drift counts real seconds back: an hour before 03:30 on
+   // the day the clocks go forward is 01:30, and two hours before 03:30
+   // on the day they go back is the second 01:30 (the hour happens twice)
+   else if (!Expect("0 30 3 9 3 * -3600", false, 2025, 1, 1, 0, 0, 0,
+                    "2025-03-09 01:30:00") ||
+            !Expect("0 30 3 2 11 * -7200", false, 2025, 7, 1, 0, 0, 0,
+                    "2025-11-02 01:30:00") ||
+            Date(2025, 7, 1, 0, 0, 0).Cron("0 30 3 2 11 * -7200").Str("%Z") !=
+               "EST")
+      rc = Fail("A negative drift across a clock change is wrong");
    else
    {
       // Changing the month or year keeps the clock time across daylight
@@ -678,40 +688,52 @@ static string EachDrift(const Date& start, const string& cron,
 
 static int CheckDriftLists()
 {
-   // A drift list gives the same answer as trying each drift by itself
+   // A drift list gives the same answer as trying each drift by itself,
+   // with only positive drifts and with negative ones mixed in
    const char *crons[] = {
       "/1 * * * * *", "0 /10 * * * *", "30 15 */2 * * *",
       "0 0 0 29 2 *", "0 0 0 29 2 1", "0 0 12 13 * 5", "0 0 0 1-7 * 1",
       "/7 /11 3,15 * 2,8 *"};
-   const char *drifts[] = {"0", "1", "59", "60", "61", "3599", "3600",
-                           "86400", "90061", "2678400", "31622400",
-                           "883612800", "2147483647"};
-   const unsigned count = sizeof(drifts)/sizeof(drifts[0]);
+   const char *positive[] = {"0", "1", "59", "60", "61", "3599", "3600",
+                             "86400", "90061", "2678400", "31622400",
+                             "883612800", "2147483647"};
+   const char *mixed[] = {"-2147483647", "-883612800", "-31622400",
+                          "-2678400", "-90061", "-86400", "-3601", "-3600",
+                          "-61", "-60", "-1", "0", "1", "60", "3600",
+                          "86400", "31622400"};
    const int starts[][6] = {
       {2025, 1, 1, 0, 0, 0}, {2024, 2, 29, 23, 59, 59},
       {2028, 2, 28, 12, 0, 0}, {2025, 6, 13, 0, 0, 0}};
 
-   for (unsigned c = 0; c < sizeof(crons)/sizeof(crons[0]); c++)
+   for (unsigned c = 0; c < 2 * sizeof(crons)/sizeof(crons[0]); c++)
    {
+      bool neg = c >= sizeof(crons)/sizeof(crons[0]);
+      const char **drifts = neg ? mixed : positive;
+      const unsigned count = neg ? sizeof(mixed)/sizeof(mixed[0]) :
+                                   sizeof(positive)/sizeof(positive[0]);
+      const char *cron = crons[neg ? c - sizeof(crons)/sizeof(crons[0]) : c];
       for (unsigned t = 0; t < sizeof(starts)/sizeof(starts[0]); t++)
       {
          Date start(starts[t][0], starts[t][1], starts[t][2],
                     starts[t][3], starts[t][4], starts[t][5]);
 
-         // Every drift, then a few smaller groups of them
-         for (unsigned first = 0; first < count; first += 4)
+         // Every drift, then a few smaller groups of them: the largest
+         // ones, and the smallest ones (all negative in the mixed list)
+         for (unsigned g = 0; g < 2 * count; g += 4)
          {
+            unsigned first = (g < count) ? g : 0;
+            unsigned last = (g < count) ? count : 2 * count - g;
             string list;
-            for (unsigned i = first; i < count; i++)
+            for (unsigned i = first; i < last; i++)
                list += (list.empty() ? "" : ",") + string(drifts[i]);
 
-            string got = start.Cron(string(crons[c]) + " " + list)
+            string got = start.Cron(string(cron) + " " + list)
                               .Str("%Y%m%d%H%M%S");
-            string expect = EachDrift(start, crons[c], drifts + first,
-                                      count - first);
+            string expect = EachDrift(start, cron, drifts + first,
+                                      last - first);
             if (got != expect)
             {
-               cerr << "FATAL: '" << crons[c] << " " << list << "' from "
+               cerr << "FATAL: '" << cron << " " << list << "' from "
                     << start.Str() << " gave " << got << ", expected "
                     << expect << endl;
                return 1;
@@ -730,6 +752,108 @@ static int CheckDriftLists()
       return Fail("A long drift list on Feb 29th was wrong");
    if ((clock() - started) / CLOCKS_PER_SEC > 1)
       return Fail("A long drift list took too long");
+   return 0;
+}
+
+// A negative drift wakes up that many seconds before the matched time,
+// and only ever gives a time after the start
+static int CheckNegativeDrift()
+{
+   // Six days before Christmas; written every way a drift can be given
+   const char *early[] = {"0 0 9 25 12 * -518400", "0 0 9 25 12 -518400",
+                          "0 0 9 25 12 +-518400", "0 0 9 25 12 * +-518400"};
+   for (unsigned i = 0; i < sizeof(early)/sizeof(early[0]); i++)
+   {
+      if (!Expect(early[i], false, 2026, 11, 10, 0, 0, 0, "2026-12-19 09:00:00"))
+         return Fail("A negative drift did not wake up early");
+   }
+   if (Date(2026, 11, 10, 0, 0, 0).Cron("0", "0", "9", "25", "12", "*",
+                                        "-518400").Str() !=
+         "2026-12-19 09:00:00")
+      return Fail("A negative drift field did not wake up early");
+
+   // Once this year's early time has passed (even if Christmas hasn't),
+   // next year's is used; the result is always after the start
+   if (!Expect("0 0 9 25 12 * -518400", false, 2026, 12, 19, 9, 0, 0,
+               "2027-12-19 09:00:00") ||
+       !Expect("0 0 9 25 12 * -518400", false, 2026, 12, 19, 8, 59, 59,
+               "2026-12-19 09:00:00") ||
+       !Expect("0 0 9 25 12 * -518400", false, 2026, 12, 22, 0, 0, 0,
+               "2027-12-19 09:00:00") ||
+       !Expect("@yearly -518400", false, 2026, 12, 26, 0, 0, 0,
+               "2027-12-26 00:00:00") ||
+       !Expect("@daily -1", false, 2026, 12, 26, 23, 59, 59,
+               "2026-12-27 23:59:59") ||
+       !Expect("0 0 9 * * * -0", false, 2026, 12, 26, 9, 0, 0,
+               "2026-12-27 09:00:00"))
+      return Fail("A negative drift whose time has passed was not skipped");
+
+   // An early time can fall in an earlier month or year than its match
+   if (!Expect("0 0 0 1 1 * -1", false, 2026, 6, 1, 0, 0, 0,
+               "2026-12-31 23:59:59") ||
+       !Expect("0 0 0 1 3 * -86400", false, 2028, 1, 1, 0, 0, 0,
+               "2028-02-29 00:00:00") ||
+       !Expect("0 0 0 1 3 * -86400", false, 2027, 1, 1, 0, 0, 0,
+               "2027-02-28 00:00:00"))
+      return Fail("A negative drift across a month or year is wrong");
+
+   // Like a positive drift, it is kept inside the schedule's interval:
+   // every 10 seconds less 11 is every 10 seconds less 1 (or plus 9)
+   if (!Expect("/10 * * * * * -11", false, 2026, 1, 1, 0, 0, 0,
+               "2026-01-01 00:00:09") ||
+       !Expect("/10 * * * * * -1", false, 2026, 1, 1, 0, 0, 0,
+               "2026-01-01 00:00:09") ||
+       !Expect("-5", false, 2026, 1, 1, 0, 0, 0, "2026-01-01 00:00:55") ||
+       !Expect("* * * * * * -2147483647", false, 2026, 1, 1, 0, 0, 0,
+               "2026-01-01 00:00:53"))
+      return Fail("A negative drift was not kept inside the interval");
+
+   // Lists and ranges can mix negative and positive drifts; the earliest
+   // time still to come wins
+   if (!Expect("0 0 10 20 12 * -3600,3600", false, 2026, 12, 20, 8, 0, 0,
+               "2026-12-20 09:00:00") ||
+       !Expect("0 0 10 20 12 * -3600,3600", false, 2026, 12, 20, 9, 30, 0,
+               "2026-12-20 11:00:00") ||
+       !Expect("0 0 10 20 12 * -3600,3600", false, 2026, 12, 20, 11, 0, 0,
+               "2027-12-20 09:00:00") ||
+       !Expect("0 0 10 20 12 * -7200--3600", false, 2026, 12, 20, 8, 30, 0,
+               "2026-12-20 08:30:01") ||
+       !Expect("0 0 10 20 12 * -3600--7200", false, 2026, 12, 20, 8, 30, 0,
+               "2026-12-20 08:30:01") ||
+       !Expect("0 0 10 20 12 * -3600-0/1800", false, 2026, 12, 20, 9, 0, 0,
+               "2026-12-20 09:30:00"))
+      return Fail("A list or range of negative drifts is wrong");
+
+   // Each next time follows on from the last, one day apart
+   Date when(2026, 12, 30, 12, 0, 0);
+   for (int i = 0; i < 4; i++)
+   {
+      Date next = when.Cron("@daily -3600");
+      if (next.Str("%H:%M:%S") != "23:00:00" ||
+          (i > 0 && next.Time() - when.Time() != 86400))
+         return Fail("Repeated negative drift times are wrong");
+      when = next;
+   }
+
+   // The int version: -1 still means no drift, other negatives work
+   Date dInt(2026, 11, 10, 0, 0, 0);
+   if (dInt.Cron(0, 0, 9, 25, 12, -1, -518400).Str() !=
+         "2026-12-19 09:00:00" ||
+       dInt.Cron(0, 0, 9, 25, 12, -1, Date::T_NO_ENTRY).Str() !=
+         "2026-12-25 09:00:00" ||
+       dInt.Cron(0, 0, 9, 25, 12, -1, Date::T_DRIFT_MIN).Str() !=
+         dInt.Cron("0 0 9 25 12 * " + to_string(Date::T_DRIFT_MIN)).Str())
+      return Fail("A negative drift through the int version is wrong");
+   // Only the drift field can be below zero
+   if (!Date::CronValid("*", "*", "*", "*", "*", "*", "-5") ||
+       Date::CronValid("-5", "*", "*") || Date::CronValid("*", "-5", "*") ||
+       Date::CronValid("*", "*", "-1") ||
+       Date::CronValid("*", "*", "*", "-1") ||
+       Date::CronValid("*", "*", "*", "*", "-1") ||
+       Date::CronValid("*", "*", "*", "*", "*", "-1"))
+      return Fail("Only the drift field may be negative");
+   if (Date::T_DRIFT_MIN != -Date::T_DRIFT_MAX)
+      return Fail("The drift range should go as far below zero as above it");
    return 0;
 }
 
@@ -864,11 +988,12 @@ static int CheckParser()
       // Numbers
       {"0005", false, true}, {"00", false, true}, {"59", false, true},
       {"60", false, false}, {"99999999999999999999", false, false},
-      {"-0", false, false}, {"0x5", false, false}, {"5.0", false, false},
+      {"-0", false, true}, {"-0 5", false, false}, {"-0 * * * *", true, false},
+      {"0x5", false, false}, {"5.0", false, false},
       {"1e1", false, false}, {"a", false, false}, {"5a", false, false},
       {"0 5 \xc3\xa9", false, false}, {"0 5 \xff", false, false},
       // Ranges and steps
-      {"5-", false, false}, {"-5", false, false}, {"--5", false, false},
+      {"5-", false, false}, {"--5", false, false},
       {"5--6", false, false}, {"5-6-7", false, false}, {"5/", false, false},
       {"5/2", false, false}, {"/", false, false}, {"*/", false, false},
       {"*/0", false, false}, {"/0", false, false}, {"*/*", false, false},
@@ -895,7 +1020,17 @@ static int CheckParser()
       {"* * * * * * 2147483647", false, true},
       {"* * * * * * 2147483648", false, false},
       {"* * * * * * /2147483647", false, true},
-      {"* * * * * * /1", false, false}, {"* * * * * * -1", false, false},
+      {"* * * * * * /1", false, false}, {"* * * * * * -1", false, true},
+      {"* * * * * * -2147483647", false, true},
+      {"* * * * * * -2147483648", false, false},
+      {"-5", false, true}, {"+-5", false, true}, {"0 0 9 -5", false, true},
+      {"-", false, false}, {"+-", false, false}, {"--5", false, false},
+      {"-5-", false, false}, {"-5 6", false, false}, {"-5 +6", false, false},
+      {"-10--5", false, true}, {"-5-5,-3600", false, true},
+      {"-60-0/15", false, true}, {"-60-0/-15", false, false},
+      {"* * * * * * */-5", false, false}, {"* * * * * * /-5", false, false},
+      {"* -5 * * * *", false, false}, {"-5 * * * *", true, false},
+      {"0 0 9 * * * -5", true, false}, {"* * * * * -1", false, true},
       {"+", false, false}, {"+ 5", false, false}, {"* 5 +", false, false},
       {"+5 6", false, false}, {"++5", false, false},
       {"* 5 +5,+6", false, false}, {"* * * * * * +5", false, true},
@@ -1235,7 +1370,19 @@ static int CheckErrorMessages()
       {"* Mon", false, "minute 'Mon': 'Mon' is not a number"},
       {"@reboot", false, "'@reboot' is not a time"},
       {"@often", false, "'@often' is not a shortcut (use @yearly"},
-      {"@daily 5", false, "only a drift (ie: '+20') may follow '@daily'"},
+      {"@daily 5", false, "only a drift (ie: '+20' or '-20') may follow '@daily'"},
+      {"@daily -", false, "a '-' needs the drift after it (ie: '-20')"},
+      {"@daily -20", true, "nothing may follow '@daily'"},
+      {"* -5 *", false, "nothing may follow the drift (the '+' or '-' entry)"},
+      {"* * * * * * -2147483648", false, "drift '-2147483648': -2147483648 "
+                                         "is outside of -2147483647 to 2147483647"},
+      {"* * * * * * 2147483648", false, "drift '2147483648': 2147483648 "
+                                        "is outside of -2147483647 to 2147483647"},
+      {"* * * * * * --5", false, "drift '--5': '--5' is not a number"},
+      {"* * * * * * -5-", false, "drift '-5-': the end of the range: a number "
+                                 "is missing at the end"},
+      {"* * * * * * -60-0/-5", false, "the step after '/': '-5' is not a number"},
+      {"-5 * * * *", true, "minute '-5': '-5' is not a number"},
       {"@daily +20", true, "nothing may follow '@daily'"},
       {"0 @daily", false, "'@daily' must be the first entry"},
       // Anything but printable ASCII is written as \xNN: UTF-8 (even cut
@@ -1354,6 +1501,35 @@ static int CheckEdges()
          catch (const runtime_error&)
          {
             // Nothing left before the end of time: fine
+         }
+      }
+   }
+
+   // Negative drifts near either end of time_t stop cleanly too (run
+   // under UBSan to see no overflow)
+   const time_t lowest = numeric_limits<time_t>::min();
+   const char *nearEnds[] = {"5 * * * * * -60", "5 * * * * * -2147483647",
+                             "5 * * * * * -2147483647,2147483647",
+                             "0 0 0 1 1 * -1"};
+   for (unsigned i = 0; i < sizeof(nearEnds)/sizeof(nearEnds[0]); i++)
+   {
+      for (time_t back = 1; back <= 4000; back *= 4)
+      {
+         time_t from[] = {highest - back, lowest + back};
+         for (unsigned f = 0; f < 2; f++)
+         {
+            try
+            {
+               time_t when = Date::CronAfter(from[f], nearEnds[i], false,
+                                             AnyTimeZone());
+               if (when <= from[f])
+                  return Fail("A negative drift near the end of time_t "
+                              "went backwards");
+            }
+            catch (const runtime_error&)
+            {
+               // Out of range: fine
+            }
          }
       }
    }
@@ -1688,7 +1864,8 @@ int main()
 
    if (CheckExtras() || CheckLeapYears() || CheckDayMatching() ||
        CheckUnsetFields() || CheckSteps() || CheckHardening() ||
-       CheckDriftLists() || CheckDaylightSaving() || CheckTimeZones() ||
+       CheckDriftLists() || CheckNegativeDrift() || CheckDaylightSaving() ||
+       CheckTimeZones() ||
        CheckParser() || CheckNamesAndShortcuts() || CheckAnyLanguage() ||
        CheckErrorMessages() ||
        CheckEdges() || CheckWaiting())

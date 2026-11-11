@@ -91,7 +91,8 @@ static const Option OPTIONS[] = {
    {'m', "month", true, "Month (1-12 or Jan-Dec)"},
    {'w', "dow", true, "Day of Week (0-6 or Sun-Sat; Sun=0 or 7)"},
    {'c', "cron", true, "Cron string formatting"},
-   {'x', "drift", true, "Additional drift time (in seconds)."},
+   {'x', "drift", true, "Additional drift time (in seconds); a negative\n"
+                        "drift wakes up that much earlier."},
    {'z', "timezone", true, "Timezone to read the schedule in (ie:\n"
                            "America/Toronto); defaults to this computer's."},
    {'C', "count", true, "List the next N times (1-1000) instead of\n"
@@ -136,11 +137,13 @@ static void PrintOptions()
 }
 
 // True if 'arg' can be the value of the option before it: it may not look
-// like an option itself (a lone '-' is fine), so a forgotten value is
-// reported instead of quietly swallowing the next option
+// like an option itself, so a forgotten value is reported instead of
+// quietly swallowing the next option.  A lone '-' and a negative number
+// (ie: '--drift -60'; no option is a digit) are fine.
 static bool IsValue(const char *arg)
 {
-   return arg != NULL && (arg[0] != '-' || arg[1] == '\0');
+   return arg != NULL &&
+          (arg[0] != '-' || arg[1] == '\0' || (arg[1] >= '0' && arg[1] <= '9'));
 }
 
 // Records option 'opt' with 'value'; each option may only be given once
@@ -203,8 +206,9 @@ static const Option *FindLong(const string& name, string& error)
 //  - Short options can be combined (-tv) and take their value attached
 //    (-n5) or as the next argument (-n 5).
 //  - Long options take theirs as --name=value or --name value.
-//  - A value given as the next argument may not start with '-'; it would
-//    be another option (ie: '-n -t' is missing the minute).
+//  - A value given as the next argument may not start with '-' (unless
+//    it is a negative number); it would be another option (ie: '-n -t'
+//    is missing the minute).
 //  - The command to run starts at '--', or at the first argument that
 //    isn't one of our options or an option's value.  Everything from
 //    there on belongs to the command (like sudo or nice), so its own
@@ -393,7 +397,7 @@ static void ProgramExamples()
         << endl << "   every minute. You could however achieve the previous example using a drift"
         << endl << "   value of '60' (seconds) and a cron (minute) entry of '*/10'." << endl << endl;
    cerr << "  Some things to consider about drifting:" << endl
-     << "   - Drifting is always calculated 'after' a specified cron." << endl
+     << "   - Drifting is always calculated from the time the cron matches." << endl
      << "   - You can not specify a drifting value on it's own without a cron entry to go"
      << endl << "     with it."
      << endl << "   - A drift value is always specified in seconds."
@@ -404,7 +408,10 @@ static void ProgramExamples()
      << endl << "     calculated." << endl
      << endl << "     For example... if you specify a a cron of '*/10' (which would equate to"
      << endl << "     unblocking every 10 seconds), and specified a drift of of 11 (seconds), the"
-     << endl << "     overflow would leave you with an actual drift of '1' (not 11)." << endl << endl;
+     << endl << "     overflow would leave you with an actual drift of '1' (not 11)."
+     << endl << "   - A negative drift moves each matched time back that many seconds"
+     << endl << "     (ie: '0 0 9 1 * * -259200' is 9:00 three days before each 1st)."
+     << endl << endl;
    cerr << "Examples: " << endl;
 
    cerr << "$> dateblock -n /10" << endl
@@ -440,6 +447,12 @@ static void ProgramExamples()
    cerr << "$> dateblock -z Asia/Tokyo -c \"0 0 9\"" << endl
      << "    This would block until 9:00 in Tokyo, whatever timezone this"
      << endl << "    computer is in (daylight saving follows that timezone)."
+     << endl << endl;
+
+   cerr << "$> dateblock -c \"0 0 9 25 12 * -518400\"" << endl
+     << "    This would block until 9:00 on December 19th: 6 days (518400"
+     << endl << "    seconds) before 9:00 on December 25th.  The same as"
+     << endl << "    $> dateblock -o 9 -d 25 -m 12 -x -518400"
      << endl << endl;
 
    cerr << "$> dateblock -n /15 -- ./backup.sh --full" << endl

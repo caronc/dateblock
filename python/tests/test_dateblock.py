@@ -257,6 +257,44 @@ class DateblockTests(unittest.TestCase):
         self.assertEqual(db("* 10 +5,8", ref=date(2000, 3, 1), block=False),
                          datetime(2000, 3, 1, 0, 10, 5))
 
+    def test_negative_drift_wakes_up_early(self):
+        # 6 days (518400 seconds) before 9:00 on December 25th
+        ref = date(2026, 11, 10)
+        for cron in ("0 0 9 25 12 * -518400", "0 0 9 25 12 -518400",
+                     "0 0 9 25 12 +-518400"):
+            self.assertEqual(db(cron, ref=ref, block=False),
+                             datetime(2026, 12, 19, 9, 0, 0), cron)
+
+    def test_negative_drift_skips_early_times_already_passed(self):
+        # Christmas is still to come, but its early time is not: next year
+        for ref in (datetime(2026, 12, 19, 9, 0, 0), date(2026, 12, 22)):
+            self.assertEqual(db("0 0 9 25 12 * -518400", ref=ref,
+                                block=False),
+                             datetime(2027, 12, 19, 9, 0, 0), ref)
+        self.assertEqual(db("@yearly -1", ref=date(2026, 6, 1), block=False),
+                         datetime(2026, 12, 31, 23, 59, 59))
+
+    def test_negative_and_positive_drifts_mixed(self):
+        cron = "0 0 10 20 12 * -3600,3600"
+        self.assertEqual(db(cron, ref=datetime(2026, 12, 20, 8), block=False),
+                         datetime(2026, 12, 20, 9, 0, 0))
+        self.assertEqual(db(cron, ref=datetime(2026, 12, 20, 9, 30),
+                            block=False),
+                         datetime(2026, 12, 20, 11, 0, 0))
+
+    def test_negative_drift_with_a_timezone(self):
+        plus9 = timezone(timedelta(hours=9))
+        ref = datetime(2026, 11, 10, tzinfo=plus9)
+        self.assertEqual(db("0 0 9 25 12 -518400", ref=ref, block=False),
+                         datetime(2026, 12, 19, 9, 0, 0, tzinfo=plus9))
+
+    def test_drift_limits(self):
+        self.assertEqual(dateblock.DRIFT_MIN, -dateblock.DRIFT_MAX)
+        self.assertEqual(
+            db("* * * * * * %d" % dateblock.DRIFT_MIN, ref=date(2000, 1, 1),
+               block=False),
+            datetime(2000, 1, 1, 0, 0, 53))
+
     def test_month_and_weekday_names(self):
         # 2000-01-01 is a Saturday
         ref = date(2000, 1, 1)
@@ -285,7 +323,10 @@ class DateblockTests(unittest.TestCase):
                 ("0 0 0 * * Sat-Sun", "'Sat-Sun' goes backwards"),
                 ("0 Mon", "'Mon' is not a number"),
                 ("@reboot", "'@reboot' is not a time"),
-                ("@daily 5", "only a drift (ie: '+20') may follow")):
+                ("@daily 5", "only a drift (ie: '+20' or '-20') may follow"),
+                ("0 -5 0", "nothing may follow the drift"),
+                ("* * * * * * -2147483648",
+                 "-2147483648 is outside of -2147483647 to 2147483647")):
             with self.assertRaises(SyntaxError) as raised:
                 db(cron, block=False)
             self.assertIn(says, str(raised.exception))
@@ -780,6 +821,12 @@ class UpcomingTests(unittest.TestCase):
         for count in ("5", 1.5, None):
             with self.assertRaises(TypeError):
                 dateblock.upcoming("* 5", count)
+
+    def test_negative_drift_lists_each_early_time(self):
+        self.assertEqual(
+            dateblock.upcoming("@daily -3600", 3, ref=datetime(2026, 1, 1, 12)),
+            (datetime(2026, 1, 1, 23), datetime(2026, 1, 2, 23),
+             datetime(2026, 1, 3, 23)))
 
     def test_each_time_follows_the_one_before(self):
         cron = "*/20 5 1-3 * * * +7"
