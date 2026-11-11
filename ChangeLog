@@ -1,6 +1,12 @@
 # Change Log
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+### Added
+- A drift can be negative, moving each matched time back that many
+  seconds, ie: `dateblock -c '0 0 9 1 * * -259200'` is a reminder at 9:00
+  three days before each 1st of the month.
+
 ## [2.1.0] - 2026-10-31
 ### Added
 - PHP bindings (PHP 8.0 and newer): `dateblock('0 0 9', ref: $tokyo)`

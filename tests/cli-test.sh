@@ -123,6 +123,28 @@ done
 "$DATEBLOCK" -C 3 -c '* 99' >/dev/null 2>&1
 [ $? -eq 1 ] || fail "--count with a bad schedule did not exit with 1"
 
+# A negative drift wakes up that many seconds early (6 days before
+# December 25th is December 19th), however it is written
+want=$(block_until -c '0 0 9 19 12')
+for cron in '0 0 9 25 12 * -518400' '0 0 9 25 12 -518400' '0 0 9 25 12 +-518400'; do
+   same "$(block_until -c "$cron")" "$want" "-c '$cron'"
+done
+for form in "-x -518400" "-x-518400" "--drift -518400" "--drift=-518400"; do
+   # shellcheck disable=SC2086
+   same "$(block_until -o 9 -d 25 -m 12 $form)" "$want" "'-o 9 -d 25 -m 12 $form'"
+done
+# ...and each later time listed still comes after the one before it
+out=$("$DATEBLOCK" -C 3 -c '@daily -3600')
+[ "$(echo "$out" | grep -c ' 23:00:00 (')" -eq 3 ] ||
+   fail "--count with '@daily -3600' did not list 3 times at 23:00: $out"
+out=$("$DATEBLOCK" -t -x -2147483648 -n 5 2>&1)
+[ $? -eq 1 ] || fail "a drift below the lowest did not exit with 1"
+echo "$out" | grep -q "drift '-2147483648': -2147483648 is outside of -2147483647 to 2147483647" ||
+   fail "a drift below the lowest was not explained: $out"
+out=$("$DATEBLOCK" -t -n -5 2>&1)
+[ $? -eq 1 ] || fail "-n -5 did not exit with 1"
+echo "$out" | grep -q "minute '-5': '-5' is not a number" || fail "-n -5 was not explained: $out"
+
 # '*' mixed into a list is refused
 "$DATEBLOCK" -t -c '0 *,5' >/dev/null 2>&1
 [ $? -eq 1 ] || fail "dateblock accepted '*,5'"

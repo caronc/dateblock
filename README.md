@@ -14,8 +14,8 @@ The difference is very subtle but can prove to be very useful.
 
 It offers a few new features that the Internet Systems Consortium (ICS) version
 does not (refering to /etc/crontab style). Dateblock specifically offers the ability
-to wake/unblock on a _specific second_ and/or _drift_ for certain period afterwards
-your calculated time is met (kind of like combining _sleep_ and _ICS Cron_ into one).
+to wake/unblock on a _specific second_ and/or _drift_ a number of seconds after
+(or before) your calculated time is met (kind of like combining _sleep_ and _ICS Cron_ into one).
 
 Python, PHP and Node.js bindings are additionally included, supporting the
 standard date and time objects of each language!
@@ -70,7 +70,8 @@ __Allowed options__:
   -m [ --month ] arg    Month (1-12 or Jan-Dec)
   -w [ --dow ] arg      Day of Week (0-6 or Sun-Sat; Sun=0 or 7)
   -c [ --cron ] arg     Cron string formatting
-  -x [ --drift ] arg    Additional drift time (in seconds).
+  -x [ --drift ] arg    Additional drift time (in seconds); a negative
+                        drift wakes up that much earlier.
   -z [ --timezone ] arg Timezone to read the schedule in (ie:
                         America/Toronto); defaults to this computer's.
   -C [ --count ] arg    List the next N times (1-1000) instead of
@@ -92,7 +93,7 @@ A variety of syntax is accepted by this tool such as:
                               too, so Fri-7 is Friday to Sunday.
 ```
 
-__Note__: With the exception of the drift option (+), all variations of the syntax
+__Note__: With the exception of the drift option (+ or -), all variations of the syntax
       mentioned above can be mixed if separated using the 'comma' (Separator)
       operator.  ie: */a,b,c-d,/e is valid.
       However: x-y-z is not valid, nor is /x/y, /x-y or a '*' mixed with
@@ -118,7 +119,7 @@ interested in. Asterisks are automatically placed in strings missing all 6
 arguments (separated by white space).
 
 The crontab shortcuts work too (with or without `--isc`).  Without `--isc`
-one can be followed by a drift (ie: `@daily +30`):
+one can be followed by a drift (ie: `@daily +30` or `@daily -30`):
 ```
   @hourly                 the start of every hour
   @daily (or @midnight)   every day at 00:00
@@ -211,12 +212,13 @@ every minute. You could however achieve the previous example using a drift
 value of '60' (seconds) and a cron (minute) entry of '*/10'.
 
 In a way, drifting is a little like executing a cron and then sleeping for
-an additional period right afterwards.  However this is a much more elegant
+an additional period right afterwards (a negative drift wakes up that much
+sooner instead).  However this is a much more elegant
 solution with a more precise blocking period.
 
 Some things to consider about drifting:
 
-- Drifting is always calculated 'after' a specified cron.
+- Drifting is always calculated from the time the cron matches.
 - You can not specify a drifting value on it's own without a cron entry to go
   with it.
 - A drift value is always specified in seconds.
@@ -248,6 +250,16 @@ Some things to consider about drifting:
   ```dateblock -c '* */5 +60'``` is the same as writing ```dateblock -c '* */5 * * * * 60'```
   Once you invoke the __+__ character however, any entries found afterwards
   will be treated as an error.
+- A drift can be negative; each matched time then moves _back_ that many
+  seconds instead of forward.
+  - A reminder 3 days (259200 seconds) before rent is due on the 1st:
+    ```dateblock -c '0 0 9 1 * * -259200'``` wakes at 9:00 on the 28th, 29th
+    or 26th, however long the month is.
+  - ```dateblock -c '0 0 9 25 12 * -518400'``` (or ```-x -518400```) wakes at
+    9:00 on December 19th (6 days before December 25th).
+  - Like _+_, an entry starting with _-_ jumps to the drift.
+  - An early time that has already passed is skipped, like any past match.
+  - Drifts go from -2147483647 to 2147483647.
 
 ### Examples
 The following would block until a minute divisible by 10 was reached.  Minutes
@@ -295,13 +307,19 @@ dateblock -c "* 5 * * * * 20"
 dateblock -n 5 -x 20
 
 # You can skip to the drift portion by just denoting a plus (+) as the last
-# entry specified.  This is interpreted as a drift time.
+# entry specified (or a minus (-) for a negative drift).  This is interpreted as a drift time.
 dateblock -c "* 5 +20"
 ```
 The expression is considered invalid if more entries are found after the drift
 period. However this is still valid:
 ```bash
 dateblock -c "* 5 * * * * +20"
+```
+
+A negative drift wakes up early; this blocks until 4:40 past each hour (20
+seconds before the 5 minute mark):
+```bash
+dateblock -n 5 -x -20
 ```
 
 ### DateBlock Python Bindings
@@ -326,6 +344,9 @@ result = dateblock("* /20", ref=relative, block=False)
 # it is off). Below would block for the start of each minute (not second
 # had you not set the isc flag)
 result = dateblock("/1", isc=True)
+
+# A negative drift wakes up early: 6 days before 9:00 on December 25th
+result = dateblock("0 0 9 25 12 * -518400", block=False)
 
 # Dateblock supports date, time and epoch time too!
 #
@@ -421,6 +442,9 @@ $result = dateblock('/5', false, 13424236);
 // A regular crontab entry: the start of each minute
 $result = dateblock('* * * * *', isc: true);
 
+// A negative drift wakes up early: 6 days before 9:00 on December 25th
+$result = dateblock('0 0 9 25 12 * -518400', block: false);
+
 // Timezones: the cron is read in the timezone of the reference, and the
 // result comes back in that same timezone.  This waits for 9:00 in Tokyo.
 $tokyo = new DateTimeImmutable('now', new DateTimeZone('Asia/Tokyo'));
@@ -468,6 +492,9 @@ next('* /20', { ref: new Date(Date.now() - 4 * 86400000) });
 
 // A regular crontab entry: the start of each minute
 next('* * * * *', { isc: true });
+
+// A negative drift wakes up early: 6 days before 9:00 on December 25th
+next('0 0 9 25 12 * -518400');
 
 // Timezones: 9:00 in Tokyo, whatever timezone this computer is in
 await dateblock('0 0 9', { timeZone: 'Asia/Tokyo' });

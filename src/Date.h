@@ -55,6 +55,7 @@ class Date
      static const int T_DOM_MAX;
      static const int T_DOW_MIN;
      static const int T_DOW_MAX;
+     // A drift may be negative (-INT_MAX to INT_MAX seconds)
      static const int T_DRIFT_MIN;
      static const int T_DRIFT_MAX;
      static const int T_NO_ENTRY;
@@ -201,7 +202,12 @@ class Date
      //  The string versions also take names (Jan-Dec, Sun-Sat) and, for
      //  a whole cron string, shortcuts such as '@daily'.
      //     Drift Offset identifies how many seconds to adjust
-     //     the final results by.
+     //     the final results by; a negative drift wakes up that
+     //     many seconds before the matched time (ie: -86400 is a
+     //     day early).  The result is always after this date: a
+     //     match whose early time has already passed is skipped.
+     //     In the int version below, -1 (T_NO_ENTRY) still means
+     //     no drift.
      //  Returns a Date Object of the next moment in time
      //  that matches specified cron entry
      //  By default lSecoffset is always set to 0 if 'nothing'

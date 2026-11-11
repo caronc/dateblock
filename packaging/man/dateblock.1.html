@@ -102,7 +102,7 @@ foreground: it returns the moment the schedule is next matched.</p>
 <ul>
   <li>match on a specific <em>second</em> (not just a minute).</li>
   <li>
-<em>drift</em>; wait an extra number of seconds after the time is matched.</li>
+<em>drift</em>; move the matched time a number of seconds later (or earlier).</li>
 </ul>
 
 <p>Use <code>--test</code> to see when <strong>dateblock</strong> would unblock without waiting, or
@@ -167,8 +167,9 @@ with the command's exit code; see <a href="#RUNNING-A-COMMAND" title="RUNNING A 
   7).</p>
 
 <p><code>-x</code>, <code>--drift=</code><var>DRIFT</var>:
-  Extra seconds to wait once the time is matched; see <a href="#DRIFTING" title="DRIFTING" data-bare-link="true">DRIFTING</a>. Use the
-  7th field (or <code>+</code><var>DRIFT</var>) instead when using <code>--cron</code>.</p>
+  Extra seconds to wait once the time is matched; a negative drift unblocks
+  that much earlier (ie: <code>-x -3600</code>). See <a href="#DRIFTING" title="DRIFTING" data-bare-link="true">DRIFTING</a>. Use the 7th field
+  (or <code>+</code><var>DRIFT</var> / <code>-</code><var>DRIFT</var>) instead when using <code>--cron</code>.</p>
 
 <p>At least one field (or <code>--cron</code>) must be given. Fields that are not given
 match any value, except for the ones <em>smaller</em> than the smallest field given:
@@ -231,11 +232,13 @@ sec (0 - 59) -------------------------+  |  |  |  |  |  |
 <code>* 5 * * * * *</code>.</p>
 
 <p>An entry starting with a plus (<code>+</code>) jumps straight to the drift field, so
-<code>* /5 +60</code> is the same as <code>* /5 * * * * 60</code>. Nothing may follow the <code>+</code>
-entry.</p>
+<code>* /5 +60</code> is the same as <code>* /5 * * * * 60</code>. An entry starting with a minus
+(<code>-</code>) does the same with a negative drift: <code>0 0 9 25 12 -518400</code> is the same
+as <code>0 0 9 25 12 * -518400</code>. Nothing may follow the <code>+</code> or <code>-</code> entry.</p>
 
 <p>The <span class="man-ref">crontab<span class="s">(5)</span></span> shortcuts can stand for the whole string, with or without
-<code>--isc</code>. Without <code>--isc</code> a <code>+</code> drift may follow one (ie: <code>@daily +30</code>);
+<code>--isc</code>. Without <code>--isc</code> a drift may follow one (ie: <code>@daily +30</code> or
+<code>@daily -30</code>);
 nothing else may, and with <code>--isc</code> nothing may follow it at all (a crontab
 entry has no drift):</p>
 
@@ -318,13 +321,14 @@ the computer itself is in.</li>
 
 <h2 id="DRIFTING">DRIFTING</h2>
 
-<p>A drift adds a number of seconds onto the time that was matched. For
+<p>A drift moves the time that was matched by a number of seconds: later,
+or earlier when negative. For
 example, to wake up on the 1st minute of every 10 minute interval (1, 11,
 21, ..., 51) use a minute of <code>*/10</code> with a drift of 60 seconds.</p>
 
 <ul>
-  <li>A drift is always measured in seconds and is applied <em>after</em> the
-schedule is matched.</li>
+  <li>A drift is always measured in (real) seconds and is applied to the
+time the schedule matched.</li>
   <li>A drift can not be given on its own; it needs a schedule to go with it.</li>
   <li>A drift can not be longer than the interval of the schedule itself.
 Only the remainder is kept, so that no matching time is ever skipped.
@@ -334,6 +338,12 @@ drifts 1 second, and a drift of 10 does nothing at all.</li>
 syntax, so <code>0 /5 +15,45</code> unblocks 15 and 45 seconds after every 5th
 minute. The modulus (<code>/x</code>) syntax does not apply to drifts.</li>
   <li>A drift list can hold at most 10,000 values (ie: <code>+0-9999</code>).</li>
+  <li>A negative drift moves each matched time back that many seconds. A
+reminder 3 days before rent is due on the 1st is
+<code>0 0 9 1 * * -259200</code> (9:00 on the 28th, 29th or 26th, however long
+the month is). An
+early time that has already passed is skipped, like any past match.</li>
+  <li>Drifts go from -2147483647 to 2147483647.</li>
 </ul>
 
 <h2 id="EXAMPLES">EXAMPLES</h2>
@@ -377,6 +387,12 @@ $ dateblock -i -c "0 9 * * Mon-Fri"
 <p>Block until the next midnight, then 30 seconds more:</p>
 
 <pre><code>$ dateblock -c "@daily +30"
+</code></pre>
+
+<p>Block until 6 days before 9:00 on December 25th (9:00 on December 19th):</p>
+
+<pre><code>$ dateblock -c "0 0 9 25 12 * -518400"
+$ dateblock -o 9 -d 25 -m 12 -x -518400
 </code></pre>
 
 <p>Block until 9:00 in Tokyo, whatever timezone this computer is in:</p>
@@ -467,7 +483,7 @@ NO WARRANTY, to the extent permitted by law.</p>
 
   <ol class='man-decor man-foot man foot'>
     <li class='tl'>Dateblock</li>
-    <li class='tc'>October 2026</li>
+    <li class='tc'>November 2026</li>
     <li class='tr'>dateblock(1)</li>
   </ol>
 
