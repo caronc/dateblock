@@ -32,7 +32,7 @@ LT_INIT([disable-static])
 
 # Shared library version (current:revision:age); see the libtool manual
 # before changing this.  It produces libdateblock.so.1
-AC_SUBST([DATEBLOCK_LT_VERSION], [2:0:1])
+AC_SUBST([DATEBLOCK_LT_VERSION], [2:1:1])
 
 AC_CONFIG_FILES([Makefile src/Makefile tests/Makefile dateblock.pc])
 AC_OUTPUT

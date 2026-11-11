@@ -1,6 +1,6 @@
 {
   "name": "@caronc/dateblock",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Block (sleep) until a cron-style moment in time",
   "keywords": ["cron", "crontab", "sleep", "schedule", "date", "time", "timezone"],
   "homepage": "https://github.com/caronc/dateblock",

@@ -32,7 +32,7 @@ Run ``help(dateblock)``, ``help(dateblock.wait)`` and
 # The package details.
 __title__ = "dateblock"
 __description__ = "Block (sleep) until a cron-style moment in time"
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 __author__ = "Chris Caron"
 __email__ = "lead2gold@gmail.com"
 __license__ = "GPL-2.0-or-later"
